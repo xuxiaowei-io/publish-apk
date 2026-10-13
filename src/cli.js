@@ -7,7 +7,7 @@
 import process from 'node:process'
 
 /** 程序名，帮助文档的「用法」「示例」里使用 */
-export const PROGRAM = 'publish-app'
+export const PROGRAM = 'publish-apk'
 
 /** 退出代码：成功 */
 export const EXIT_OK = 0

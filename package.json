@@ -21,7 +21,7 @@
   },
   "type": "module",
   "bin": {
-    "publish-app": "src/publish-app.js"
+    "publish-apk": "src/publish-apk.js"
   },
   "files": [
     "src"
@@ -30,6 +30,6 @@
     "node": ">=18"
   },
   "scripts": {
-    "help": "node src/publish-app.js"
+    "help": "node src/publish-apk.js"
   }
 }

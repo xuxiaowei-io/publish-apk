@@ -46,13 +46,13 @@ jobs:
 
       - name: Smoke test CLI
         run: |
-          node src/publish-app.js --version
-          node src/publish-app.js huawei --help > /dev/null
-          node src/publish-app.js huawei service-account --help > /dev/null
-          node src/publish-app.js huawei service-account-upload-url --help > /dev/null
-          node src/publish-app.js huawei client-credentials --help > /dev/null
-          node src/publish-app.js huawei client-credentials-upload-url --help > /dev/null
-          node src/publish-app.js help > /dev/null
+          node src/publish-apk.js --version
+          node src/publish-apk.js huawei --help > /dev/null
+          node src/publish-apk.js huawei service-account --help > /dev/null
+          node src/publish-apk.js huawei service-account-upload-url --help > /dev/null
+          node src/publish-apk.js huawei client-credentials --help > /dev/null
+          node src/publish-apk.js huawei client-credentials-upload-url --help > /dev/null
+          node src/publish-apk.js help > /dev/null
 
       - name: Stage publish to npm
         run: |

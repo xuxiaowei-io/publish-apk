@@ -1,34 +1,34 @@
 /**
- * 华为应用市场命令（`publish-app huawei ...`）。
+ * 华为应用市场命令（`publish-apk huawei ...`）。
  *
  * 厂商隔离：所有华为相关的东西都在本模块——
  *   - 命令与帮助文档（huawei / huawei service-account）
  *   - JWT 固定值：typ、alg、aud、exp 相对 iat 的偏移
  *   - 华为特有的选项与环境变量（--kid/--iss、HUAWEI_KID/HUAWEI_ISS 等）
  *
- * publish-app.js 只做根命令分发，不出现任何华为字样。
+ * publish-apk.js 只做根命令分发，不出现任何华为字样。
  * 将来新增小米等厂商，照本模块的形状新增 src/xiaomi.js，
- * 然后在 publish-app.js 的 VENDORS 里注册一行即可。
+ * 然后在 publish-apk.js 的 VENDORS 里注册一行即可。
  *
  * 已支持的行为：
- *   1. node src/publish-app.js huawei               输出 huawei 帮助文档
- *   2. node src/publish-app.js huawei help          输出 huawei 帮助文档
- *   3. node src/publish-app.js huawei --help        输出 huawei 帮助文档
- *   4. node src/publish-app.js huawei service-account
+ *   1. node src/publish-apk.js huawei               输出 huawei 帮助文档
+ *   2. node src/publish-apk.js huawei help          输出 huawei 帮助文档
+ *   3. node src/publish-apk.js huawei --help        输出 huawei 帮助文档
+ *   4. node src/publish-apk.js huawei service-account
  *      输出 service-account 帮助文档，并在 stderr 记录缺少的必填参数
  *      （--kid、--iss、--private-key/--private-key-data，也支持环境变量
  *      HUAWEI_KID、HUAWEI_ISS、HUAWEI_PRIVATE_KEY），退出代码 1
- *   5. node src/publish-app.js huawei service-account --help  输出 service-account 帮助文档
- *   6. node src/publish-app.js huawei service-account <必填参数>
+ *   5. node src/publish-apk.js huawei service-account --help  输出 service-account 帮助文档
+ *   6. node src/publish-apk.js huawei service-account <必填参数>
  *      用私钥签发 PS256 JWT（node:crypto 实现，无第三方依赖），签名结果写 stdout，退出代码 0
- *   7. node src/publish-app.js huawei client-credentials <必填参数>
+ *   7. node src/publish-apk.js huawei client-credentials <必填参数>
  *      用 API 客户端的 client_id + client_secret 调 POST /api/oauth2/v1/token 换取 access_token，
  *      access_token 写 stdout，退出代码 0
- *   8. node src/publish-app.js huawei service-account-upload-url <必填参数>
+ *   8. node src/publish-apk.js huawei service-account-upload-url <必填参数>
  *      确定 Service Account Token（命令行 service-account 参数本地签发优先，其次 --token），
  *      再调 GET /api/publish/v2/upload-url/for-obs 获取文件上传地址，
  *      接口原始响应 JSON（含 urlInfo.url/method/headers）写 stdout，退出代码 0
- *   9. node src/publish-app.js huawei client-credentials-upload-url <必填参数>
+ *   9. node src/publish-apk.js huawei client-credentials-upload-url <必填参数>
  *      确定 access_token（命令行 client-credentials 参数本地换取优先，其次 --token），
  *      再调同一个接口获取文件上传地址，并按 API 客户端方式同时携带 client_id 头，
  *      接口原始响应 JSON 写 stdout，退出代码 0
@@ -1354,7 +1354,7 @@ async function runHuawei(argv, env) {
 }
 
 /**
- * 华为命令描述，由 publish-app.js 注册到厂商表中。
+ * 华为命令描述，由 publish-apk.js 注册到厂商表中。
  *
  * 命令名与摘要是华为自己的信息，因此放在本模块而不是根入口，
  * 这样根入口完全不需要知道「华为」这两个字。

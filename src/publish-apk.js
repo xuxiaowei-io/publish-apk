@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * publish-app 命令行入口（根命令）。
+ * publish-apk 命令行入口（根命令）。
  *
  * 本文件保持**厂商无关**：只负责根帮助、版本号与厂商子命令分发。
  * 各厂商的命令与帮助文档放在各自模块里（当前只有 src/huawei.js），
  * 新增厂商时实现 runXxx(argv, env) 并在下面 VENDORS 注册一行即可。
  *
  * 根命令已支持的行为：
- *   1. node src/publish-app.js              输出根帮助文档
- *   2. node src/publish-app.js help         输出根帮助文档
- *   3. node src/publish-app.js --help       输出根帮助文档
- *   4. node src/publish-app.js -v           输出版本号
- *   5. node src/publish-app.js <厂商> ...   分发给对应厂商模块（如 huawei，见 src/huawei.js）
- *   6. node src/publish-app.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
+ *   1. node src/publish-apk.js              输出根帮助文档
+ *   2. node src/publish-apk.js help         输出根帮助文档
+ *   3. node src/publish-apk.js --help       输出根帮助文档
+ *   4. node src/publish-apk.js -v           输出版本号
+ *   5. node src/publish-apk.js <厂商> ...   分发给对应厂商模块（如 huawei，见 src/huawei.js）
+ *   6. node src/publish-apk.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
  *
  * 厂商命令的详细行为见各自模块的头部注释。
  *

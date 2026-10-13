@@ -73,31 +73,31 @@ help: ## Show help information
 	huawei-client-credentials-upload-url-help huawei-client-credentials-upload-url
 
 h: ## 帮助文档
-	node src/publish-app.js
+	node src/publish-apk.js
 
 huawei-help: ## 华为 帮助文档
-	node src/publish-app.js huawei
+	node src/publish-apk.js huawei
 
 huawei-service-account-help: ## 华为 Service Account JWT 帮助文档
-	node src/publish-app.js huawei service-account --help
+	node src/publish-apk.js huawei service-account --help
 
 huawei-service-account: ## 华为 Service Account JWT（HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY[_DATA]，HUAWEI_ARGS 追加参数）
-	@node src/publish-app.js huawei service-account $(HUAWEI_SERVICE_ACCOUNT_ARGS) $(HUAWEI_ARGS)
+	@node src/publish-apk.js huawei service-account $(HUAWEI_SERVICE_ACCOUNT_ARGS) $(HUAWEI_ARGS)
 
 huawei-service-account-upload-url-help: ## 华为 获取文件上传地址帮助文档
-	node src/publish-app.js huawei service-account-upload-url --help
+	node src/publish-apk.js huawei service-account-upload-url --help
 
 huawei-service-account-upload-url: ## 华为 获取文件上传地址（HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH，Token 同 service-account）
-	@node src/publish-app.js huawei service-account-upload-url $(HUAWEI_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
+	@node src/publish-apk.js huawei service-account-upload-url $(HUAWEI_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
 
 huawei-client-credentials-help: ## 华为 获取 access_token 帮助文档
-	node src/publish-app.js huawei client-credentials --help
+	node src/publish-apk.js huawei client-credentials --help
 
 huawei-client-credentials: ## 华为 获取 access_token（HUAWEI_CLIENT_ID / HUAWEI_CLIENT_SECRET，HUAWEI_ARGS 追加参数）
-	@node src/publish-app.js huawei client-credentials $(HUAWEI_CLIENT_CREDENTIALS_ARGS) $(HUAWEI_ARGS)
+	@node src/publish-apk.js huawei client-credentials $(HUAWEI_CLIENT_CREDENTIALS_ARGS) $(HUAWEI_ARGS)
 
 huawei-client-credentials-upload-url-help: ## 华为 获取文件上传地址（API 客户端）帮助文档
-	node src/publish-app.js huawei client-credentials-upload-url --help
+	node src/publish-apk.js huawei client-credentials-upload-url --help
 
 huawei-client-credentials-upload-url: ## 华为 获取文件上传地址（API 客户端，HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH，凭证同 client-credentials）
-	@node src/publish-app.js huawei client-credentials-upload-url $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
+	@node src/publish-apk.js huawei client-credentials-upload-url $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
