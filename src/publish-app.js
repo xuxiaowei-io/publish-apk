@@ -1,0 +1,119 @@
+#!/usr/bin/env node
+/**
+ * publish-app 命令行入口（根命令）。
+ *
+ * 本文件保持**厂商无关**：只负责根帮助、版本号与厂商子命令分发。
+ * 各厂商的命令与帮助文档放在各自模块里（当前只有 src/huawei.js），
+ * 新增厂商时实现 runXxx(argv, env) 并在下面 VENDORS 注册一行即可。
+ *
+ * 根命令已支持的行为：
+ *   1. node src/publish-app.js              输出根帮助文档
+ *   2. node src/publish-app.js help         输出根帮助文档
+ *   3. node src/publish-app.js --help       输出根帮助文档
+ *   4. node src/publish-app.js -v           输出版本号
+ *   5. node src/publish-app.js <厂商> ...   分发给对应厂商模块（如 huawei，见 src/huawei.js）
+ *   6. node src/publish-app.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
+ *
+ * 厂商命令的详细行为见各自模块的头部注释。
+ *
+ * 帮助文档写 stdout、错误日志写 stderr，两者分离（便于 `2>/dev/null`）；
+ * 用法错误先输出帮助文档、再输出错误日志，保证「怎么用」出现在错误信息之前；
+ * 帮助类写法（help、-h、-help、--help、--help=true 等）一律输出帮助文档且退出代码 0。
+ */
+import { createRequire } from 'node:module'
+import process from 'node:process'
+
+import {
+  EXIT_FAILURE,
+  EXIT_OK,
+  PROGRAM,
+  UsageError,
+  installOutputGuards,
+  isHelpToken,
+  stderr,
+  stdout,
+  writeStdout,
+} from './cli.js'
+import { renderHelp } from './help.js'
+import { huaweiCommand } from './huawei.js'
+
+/**
+ * 厂商命令表：厂商模块导出 { name, summary, run } 描述，这里注册即可。
+ * 新增厂商（如小米）只需两步：
+ *   import { xiaomiCommand } from './xiaomi.js'
+ *   const VENDORS = [huaweiCommand, xiaomiCommand]
+ * 根帮助的「命令」一栏会自动跟着更新。
+ */
+const VENDORS = [huaweiCommand]
+
+const { version } = createRequire(import.meta.url)('../package.json')
+
+/** 根帮助文档：无参数、help、--help、-h */
+function renderRootHelp() {
+  return renderHelp({
+    title: `${PROGRAM} - 发布 APP`,
+    usage: [`${PROGRAM} [命令] [选项]`],
+    sections: [
+      {
+        title: '命令',
+        entries: [
+          ...VENDORS.map(({ name, summary }) => [name, summary]),
+          ['help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '选项',
+        entries: [
+          ['-h, --help', '显示帮助信息'],
+          ['-v, --version', '显示版本号'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${PROGRAM} <厂商>                 查看该厂商的子命令`,
+      `  ${PROGRAM} <厂商> <命令> --help   查看该命令的帮助文档`,
+    ],
+  })
+}
+
+/** 根命令分发：只认识帮助、版本号与已注册的厂商 */
+async function run(argv, env) {
+  const [command, ...rest] = argv
+  if (command === undefined || isHelpToken(command)) {
+    stdout(renderRootHelp())
+    return EXIT_OK
+  }
+  if (command === '-v' || command === '--version') {
+    stdout(version)
+    return EXIT_OK
+  }
+
+  const vendor = VENDORS.find((item) => item.name === command)
+  if (vendor !== undefined) {
+    return vendor.run(rest, env)
+  }
+
+  throw new UsageError(`未知命令 "${command}"`, renderRootHelp())
+}
+
+async function main() {
+  installOutputGuards()
+  try {
+    // 厂商命令可能需要发起网络请求（如 huawei client-credentials），因此统一 await
+    return await run(process.argv.slice(2), process.env)
+  } catch (error) {
+    if (error instanceof UsageError) {
+      // 顺序：先用法、后错误。帮助文档在 stdout、错误日志在 stderr，两个流各自独立缓冲，
+      // 所以先 await 帮助文档写完，再写错误日志，终端与重定向里都能看到「用法在前、错误在后」。
+      await writeStdout(error.help)
+      stderr('')
+      stderr(`错误: ${error.message}`)
+    } else {
+      stderr(`错误: ${error.message}`)
+    }
+    return EXIT_FAILURE
+  }
+}
+
+process.exitCode = await main()

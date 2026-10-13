@@ -1,0 +1,35 @@
+{
+  "name": "publish-apk",
+  "version": "0.0.1-alpha.1",
+  "description": "发布 APP",
+  "keywords": [
+    "huawei",
+    "agc",
+    "appgallery",
+    "publish",
+    "cli"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/xuxiaowei-io/publish-app.git"
+  },
+  "license": "MIT",
+  "author": {
+    "name": "徐晓伟",
+    "url": "https://xuxiaowei.io",
+    "email": "xuxiaowei@xuxiaowei.com.cn"
+  },
+  "type": "module",
+  "bin": {
+    "publish-app": "src/publish-app.js"
+  },
+  "files": [
+    "src"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "help": "node src/publish-app.js"
+  }
+}
