@@ -1,0 +1,70 @@
+# https://docs.npmjs.com/trusted-publishers
+# https://docs.npmjs.com/staged-publishing
+
+name: Publish Package
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false  # never use caching in release builds
+
+      - name: Print Node.js and npm versions
+        run: |
+          node -v
+          npm -v
+
+      - name: Verify tag matches package.json version
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
+          if [ "$tag" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match version $version in package.json"
+            exit 1
+          fi
+          echo "Version $version verified"
+
+      - name: Check syntax
+        run: for file in src/*.js; do node --check "$file"; done
+
+      - name: Smoke test CLI
+        run: |
+          node src/publish-app.js --version
+          node src/publish-app.js huawei --help > /dev/null
+          node src/publish-app.js huawei service-account --help > /dev/null
+          node src/publish-app.js huawei service-account-upload-url --help > /dev/null
+          node src/publish-app.js huawei client-credentials --help > /dev/null
+          node src/publish-app.js huawei client-credentials-upload-url --help > /dev/null
+          node src/publish-app.js help > /dev/null
+
+      - name: Stage publish to npm
+        run: |
+          version="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
+          # npm refuses to publish a prerelease version without an explicit dist-tag,
+          # so derive it from the prerelease identifier (0.0.1-alpha.1 -> alpha),
+          # and fall back to "latest" for stable versions.
+          if [[ "$version" == *-* ]]; then
+            dist_tag="${version#*-}"
+            dist_tag="${dist_tag%%.*}"
+          else
+            dist_tag="latest"
+          fi
+          echo "Staging $version with dist-tag $dist_tag"
+          npm stage publish --tag "$dist_tag"
