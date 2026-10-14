@@ -76,7 +76,8 @@ help: ## Show help information
 	huawei-service-account-help huawei-service-account \
 	huawei-service-account-upload-url-help huawei-service-account-upload-url \
 	huawei-client-credentials-help huawei-client-credentials \
-	huawei-client-credentials-upload-url-help huawei-client-credentials-upload-url
+	huawei-client-credentials-upload-url-help huawei-client-credentials-upload-url \
+	pack-check
 
 h: ## 帮助文档
 	node src/publish-apk.js
@@ -107,3 +108,12 @@ huawei-client-credentials-upload-url-help: ## 华为 获取文件上传地址（
 
 huawei-client-credentials-upload-url: ## 华为 获取文件上传地址（API 客户端，HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH，凭证同 client-credentials，HUAWEI_VERBOSE 开启日志）
 	@node src/publish-apk.js huawei client-credentials-upload-url $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
+
+# ------------------------------------------------------------------ npm 发布物
+
+# npm pack --dry-run 只打印「会打进包里的文件清单」，不会生成 .tgz，也不改动工作区，
+# 因此可以作为发布前的检查项：确认 src 之外，package.json、README* 与 LICENSE* 也在包里。
+# 注意 package.json 的 files 只写了 src，但 npm 永远会带上 package.json、README*、LICENSE*
+# 以及 bin/main 指向的文件，所以这里不依赖 files 的写法，值得在发布前看一眼。
+pack-check: ## 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
+	npm pack --dry-run
