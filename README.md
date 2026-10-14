@@ -75,8 +75,9 @@ publish-apk huawei service-account \
   --kid <密钥ID> --iss <签发者> --private-key ./private.pem
 
 # 2. 获取文件上传地址（token 已在环境变量里，或本命令用 service-account 参数本地签发）
+#    --file 会用本地文件的文件名补 --file-name、用它的字节数补 --content-length
 RESP=$(publish-apk huawei service-account-upload-url \
-  --app-id <应用ID> --file-name a1.apk --content-length 111223 \
+  --app-id <应用ID> --file ./a1.apk \
   --kid <密钥ID> --iss <签发者> --private-key ./private.pem)
 
 # 3. 按接口返回的方法与地址上传（请求头见 urlInfo.headers，其中含 OBS 签名所需信息）
@@ -86,8 +87,34 @@ curl -X "$(jq -r .urlInfo.method <<<"$RESP")" \
 # 4. API 客户端方式：先换 access_token，再取上传地址
 publish-apk huawei client-credentials --client-id <客户端ID> --client-secret <密钥>
 publish-apk huawei client-credentials-upload-url \
-  --app-id <应用ID> --file-name a1.apk --content-length 111223 \
+  --app-id <应用ID> --file ./a1.apk \
   --client-id <客户端ID> --client-secret <密钥>
+```
+
+### 文件参数：`--file` / `--file-name` / `--content-length`
+
+两个 `*-upload-url` 命令都要把 `fileName` 与 `contentLength` 作为查询参数发给华为接口，这两个值可以自动推导，不必手算：
+
+| 参数 | 是否必填 | 说明 |
+| --- | --- | --- |
+| `--file <路径>` | 否 | **本地文件路径**，用来补下面两项：文件名取它的 basename，大小取它的字节数（`HUAWEI_FILE`） |
+| `--file-name <文件名>` | 否 | 上传后的对象名；显式给出时以它为准，否则取 `--file` 的文件名 |
+| `--content-length <字节>` | 否 | 文件大小；显式给出时以它为准，否则取 `--file` 的大小 |
+
+- 规则是「**`--file` 只补缺**」：`--file-name` / `--content-length`（命令行或环境变量）给了哪个就听哪个，都没给才从 `--file` 推导。
+- 只有真的需要推导时才读文件：两项都显式给出时，`--file` 不会被读取，路径不存在也不会报错。
+- 反过来，只要还缺一项，`--file` 就必须指向存在的**普通文件**，否则报用法错误（目录、路径写错都会被拦下）。
+- 与 `--token` 之类一样，`--file-name` / `--content-length` 没有 `--file` 时仍然可用，行为与旧版本完全一致。
+
+```bash
+# 只给文件，其余自动推导（fileName=a1.apk，contentLength=文件字节数）
+publish-apk huawei service-account-upload-url --app-id <应用ID> --file ./a1.apk --token <Token>
+
+# 文件在本地叫 a1.apk，但希望上传后叫 a1-release.apk：显式覆盖名字，大小仍然自动推导
+publish-apk huawei service-account-upload-url --app-id <应用ID> --file ./a1.apk --file-name a1-release.apk
+
+# 不读本地文件，完全手工指定（旧写法，仍然支持）
+publish-apk huawei service-account-upload-url --app-id <应用ID> --file-name a1.apk --content-length 111223
 ```
 
 ## 环境变量
@@ -104,29 +131,31 @@ publish-apk huawei client-credentials-upload-url \
 | `HUAWEI_CLIENT_ID` | `--client-id` | API 客户端 ID |
 | `HUAWEI_CLIENT_SECRET` | `--client-secret` | API 客户端密钥 |
 | `HUAWEI_APP_ID` | `--app-id` | AppGallery Connect 的 `appId`（非负整数） |
-| `HUAWEI_FILE_NAME` | `--file-name` | 上传的文件名，如 `a1.apk` |
-| `HUAWEI_CONTENT_LENGTH` | `--content-length` | 文件大小（字节，非负整数） |
+| `HUAWEI_FILE` | `--file` | 本地文件路径；用它的文件名补 `--file-name`、字节数补 `--content-length` |
+| `HUAWEI_FILE_NAME` | `--file-name` | 上传的文件名，如 `a1.apk`；未显式给出时取 `HUAWEI_FILE` 的文件名 |
+| `HUAWEI_CONTENT_LENGTH` | `--content-length` | 文件大小（字节，非负整数）；未显式给出时取 `HUAWEI_FILE` 的字节数 |
 | `HUAWEI_TOKEN` | `--token` | 已签发的 JWT 或 `access_token` |
 | `HUAWEI_VERBOSE` | `--verbose` | 开启运行日志：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 | `HUAWEI_API_BASE` | —（仅环境变量） | 接口域名，默认 `https://connect-api.cloud.huawei.com`；其他区域（`connect-api-dre/dra/drru.cloud.huawei.com`）或本地联调时覆盖 |
 
-示例（密钥全程只走环境变量，不出现在命令行参数里）：
+示例（密钥全程只走环境变量，不出现在命令行参数里；文件大小由 `HUAWEI_FILE` 自动推导）：
 
 ```bash
 export HUAWEI_KID=<密钥ID>
 export HUAWEI_ISS=<签发者>
 export HUAWEI_PRIVATE_KEY=./private.pem
 export HUAWEI_APP_ID=<应用ID>
-export HUAWEI_FILE_NAME=a1.apk
-export HUAWEI_CONTENT_LENGTH=111223
+export HUAWEI_FILE=./a1.apk
 
 publish-apk huawei service-account-upload-url
 ```
 
+如果本机拿不到文件（例如由别的步骤产出），就用 `HUAWEI_FILE_NAME` + `HUAWEI_CONTENT_LENGTH` 显式给出这两个值。
+
 ## 输出与退出代码约定
 
 - `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON），可直接被 `$(…)` 与 `jq` 取用。
-- `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径只显示掩码**，私钥数据永不写入日志。
+- `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径只显示掩码**，私钥数据永不写入日志（`--file` 的本地路径按原样打印，它不是凭证，出错时正是靠它定位）。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
 
@@ -139,7 +168,7 @@ make help                                       # 目标列表
 make h                                           # 根帮助
 make huawei-help                                 # huawei 子命令帮助
 make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
-make huawei-service-account-upload-url HUAWEI_APP_ID=xxx HUAWEI_FILE_NAME=a1.apk HUAWEI_CONTENT_LENGTH=111223
+make huawei-service-account-upload-url HUAWEI_APP_ID=xxx HUAWEI_FILE=./a1.apk
 make huawei-client-credentials HUAWEI_CLIENT_ID=xxx HUAWEI_CLIENT_SECRET=xxx
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```

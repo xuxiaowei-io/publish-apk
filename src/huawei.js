@@ -32,11 +32,14 @@
  *      确定 access_token（命令行 client-credentials 参数本地换取优先，其次 --token），
  *      再调同一个接口获取文件上传地址，并按 API 客户端方式同时携带 client_id 头，
  *      接口原始响应 JSON 写 stdout，退出代码 0
+ *      （8、9 的文件参数：--file/--file-name/--content-length 三选足够——--file 会自动补
+ *      文件名与文件大小，见 collectUploadUrlParams）
  *
  * 环境变量：每个带值的选项都有同名环境变量兜底（选项优先），见各命令帮助文档的「环境变量」小节；
  * 开关型选项 --verbose 也有环境变量 HUAWEI_VERBOSE（1/true/yes/on 开启、0/false/no/off 关闭）。
  */
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
+import { basename } from 'node:path'
 
 import {
   EXIT_FAILURE,
@@ -156,9 +159,11 @@ const ENV_CLIENT_SECRET = 'HUAWEI_CLIENT_SECRET'
 const OPTION_TOKEN = '--token'
 /** 两个 upload-url 命令：应用 ID（AppGallery Connect 的 appId） */
 const OPTION_APP_ID = '--app-id'
-/** 两个 upload-url 命令：上传后的文件名 */
+/** 两个 upload-url 命令：本地文件路径，用来推导 --file-name 与 --content-length */
+const OPTION_FILE = '--file'
+/** 两个 upload-url 命令：上传后的文件名（不传时取 --file 的文件名） */
 const OPTION_FILE_NAME = '--file-name'
-/** 两个 upload-url 命令：文件大小（字节） */
+/** 两个 upload-url 命令：文件大小（字节，不传时取 --file 的文件大小） */
 const OPTION_CONTENT_LENGTH = '--content-length'
 
 /**
@@ -169,6 +174,7 @@ const SERVICE_ACCOUNT_UPLOAD_URL_OPTIONS = new Set([
   ...SERVICE_ACCOUNT_OPTIONS,
   OPTION_TOKEN,
   OPTION_APP_ID,
+  OPTION_FILE,
   OPTION_FILE_NAME,
   OPTION_CONTENT_LENGTH,
 ])
@@ -183,6 +189,7 @@ const CLIENT_CREDENTIALS_UPLOAD_URL_OPTIONS = new Set([
   ...CLIENT_CREDENTIALS_OPTIONS,
   OPTION_TOKEN,
   OPTION_APP_ID,
+  OPTION_FILE,
   OPTION_FILE_NAME,
   OPTION_CONTENT_LENGTH,
 ])
@@ -191,6 +198,8 @@ const CLIENT_CREDENTIALS_UPLOAD_URL_FLAGS = new Set([OPTION_VERBOSE])
 
 const ENV_TOKEN = 'HUAWEI_TOKEN'
 const ENV_APP_ID = 'HUAWEI_APP_ID'
+/** 本地文件路径，等价于 --file */
+const ENV_FILE = 'HUAWEI_FILE'
 const ENV_FILE_NAME = 'HUAWEI_FILE_NAME'
 const ENV_CONTENT_LENGTH = 'HUAWEI_CONTENT_LENGTH'
 
@@ -740,29 +749,90 @@ function assertNonNegativeInteger(value, option, label, help) {
 }
 
 /**
+ * 读取 --file / HUAWEI_FILE 指向的本地文件大小（字节）。
+ *
+ * 调用前需确认「确实需要从文件推导」，因为它同时承担路径校验：
+ * 路径不存在、不是普通文件、大小超出安全整数范围都会抛用法错误（附帮助文档）。
+ *
+ * 错误信息里**完整**给出路径（不做掩码）：这是使用者自己刚在命令行/环境变量里给出的输入，
+ * 不知道是哪个路径就无法修正；与私钥路径不同，待上传的文件路径本身不是凭证。
+ */
+function localFileSize(path, origin, help) {
+  if (!existsSync(path)) {
+    throw new UsageError(`文件不存在: ${path}（来自 ${origin}）`, help())
+  }
+  const stats = statSync(path)
+  if (!stats.isFile()) {
+    throw new UsageError(`不是普通文件: ${path}（来自 ${origin}）`, help())
+  }
+  if (!Number.isSafeInteger(stats.size)) {
+    throw new UsageError(`文件大小超出可表示范围: ${path}（来自 ${origin}）`, help())
+  }
+  return stats.size
+}
+
+/**
  * 收集两个 upload-url 命令共用的应用与文件参数（选项优先，其次环境变量）。
+ *
+ * --file / HUAWEI_FILE 是「本地文件」这个输入的单一来源，用来补两个缺失项：
+ *   --file-name       → 取该文件的文件名（basename）
+ *   --content-length  → 取该文件的字节数
+ * 两者都可以被显式值覆盖（显式优先），所以 --content-length 不再是必填项；
+ * 反过来，只要其中一项还缺着，就需要读文件，此时路径非法会直接报错。
+ * 两项都由显式值给出时完全不读文件，也就不会因为路径不存在而失败——`--file` 只用于补缺。
  *
  * 缺失项不在这里抛错，而是回传 missing 数组：调用方要把它与「Token 来源缺失」等其它问题
  * 合并成一条错误信息，避免调用方逐个试错。
  *
- * @returns {{ appId?: string, fileName?: string, contentLength?: string, missing: string[] }}
+ * @returns {{ appId?: string, fileName?: string, contentLength?: string, file?: string, derivedFromFile: string[], missing: string[] }}
+ *   file / derivedFromFile 仅在「本次真的用它推导了某一项」时回传，供 --verbose 日志说明来源
  */
-function collectUploadUrlParams(options, env) {
+function collectUploadUrlParams(options, env, help) {
   const appId = options.get(OPTION_APP_ID) ?? readEnv(env, ENV_APP_ID)
-  const fileName = options.get(OPTION_FILE_NAME) ?? readEnv(env, ENV_FILE_NAME)
-  const contentLength = options.get(OPTION_CONTENT_LENGTH) ?? readEnv(env, ENV_CONTENT_LENGTH)
+  const file = options.get(OPTION_FILE) ?? readEnv(env, ENV_FILE)
+  // 显式值：命令行选项优先，其次各自的环境变量
+  let fileName = options.get(OPTION_FILE_NAME) ?? readEnv(env, ENV_FILE_NAME)
+  let contentLength = options.get(OPTION_CONTENT_LENGTH) ?? readEnv(env, ENV_CONTENT_LENGTH)
+
+  const needsFile = file !== undefined && (fileName === undefined || contentLength === undefined)
+  const derivedFromFile = []
+  if (needsFile) {
+    const origin = options.has(OPTION_FILE) ? OPTION_FILE : `${ENV_FILE} 环境变量`
+    const size = localFileSize(file, origin, help)
+    if (fileName === undefined) {
+      fileName = basename(file)
+      derivedFromFile.push(OPTION_FILE_NAME)
+    }
+    if (contentLength === undefined) {
+      contentLength = String(size)
+      derivedFromFile.push(OPTION_CONTENT_LENGTH)
+    }
+  }
 
   const missing = []
   if (appId === undefined) {
     missing.push(`${OPTION_APP_ID}（应用 ID），可用环境变量 ${ENV_APP_ID}`)
   }
   if (fileName === undefined) {
-    missing.push(`${OPTION_FILE_NAME}（文件名），可用环境变量 ${ENV_FILE_NAME}`)
+    missing.push(
+      `${OPTION_FILE_NAME}（文件名），可用环境变量 ${ENV_FILE_NAME}，` +
+        `或给 ${OPTION_FILE} 由本地文件名推导`,
+    )
   }
   if (contentLength === undefined) {
-    missing.push(`${OPTION_CONTENT_LENGTH}（文件大小，字节），可用环境变量 ${ENV_CONTENT_LENGTH}`)
+    missing.push(
+      `${OPTION_CONTENT_LENGTH}（文件大小，字节），可用环境变量 ${ENV_CONTENT_LENGTH}，` +
+        `或给 ${OPTION_FILE} 由本地文件大小推导`,
+    )
   }
-  return { appId, fileName, contentLength, missing }
+  return {
+    appId,
+    fileName,
+    contentLength,
+    file: needsFile ? file : undefined,
+    derivedFromFile,
+    missing,
+  }
 }
 
 /** --token 模式下日志里展示的来源名（区分命令行与环境变量，两个 upload-url 命令共用） */
@@ -784,6 +854,8 @@ async function fetchUploadUrlAndPrint({
   appId,
   fileName,
   contentLength,
+  file,
+  derivedFromFile,
   apiBase,
   verbose,
 }) {
@@ -813,6 +885,11 @@ async function fetchUploadUrlAndPrint({
     stderr(`  appId:         ${appId}`)
     stderr(`  fileName:      ${fileName}`)
     stderr(`  contentLength: ${contentLength}`)
+    // 本地路径按原样打印：它不是凭证，出问题时正是靠它定位是哪个文件；
+    // 括号里只列出真的由文件推导的项，避免把显式给出的值说成推导来的
+    if (file !== undefined) {
+      stderr(`  文件:          ${file}（${derivedFromFile.join(' / ')} 由该文件推导）`)
+    }
     if (urlInfo.objectId !== undefined) {
       stderr(`  objectId:      ${urlInfo.objectId}`)
     }
@@ -853,7 +930,11 @@ async function runHuaweiServiceAccountUploadUrl(argv, env) {
   )
   const verbose = resolveVerbose(options, env, renderHuaweiServiceAccountUploadUrlHelp)
 
-  const { appId, fileName, contentLength, missing } = collectUploadUrlParams(options, env)
+  const { appId, fileName, contentLength, file, derivedFromFile, missing } = collectUploadUrlParams(
+    options,
+    env,
+    renderHuaweiServiceAccountUploadUrlHelp,
+  )
   const token = options.get(OPTION_TOKEN) ?? readEnv(env, ENV_TOKEN)
 
   const usesServiceAccountOptions = [
@@ -906,6 +987,8 @@ async function runHuaweiServiceAccountUploadUrl(argv, env) {
     appId,
     fileName,
     contentLength,
+    file,
+    derivedFromFile,
     // 域名可用 HUAWEI_API_BASE 覆盖（区域不同域名不同），所以日志里打印实际用到的地址
     apiBase: readEnv(env, ENV_API_BASE) ?? API_BASE_CN,
     verbose,
@@ -941,7 +1024,11 @@ async function runHuaweiClientCredentialsUploadUrl(argv, env) {
   )
   const verbose = resolveVerbose(options, env, renderHuaweiClientCredentialsUploadUrlHelp)
 
-  const { appId, fileName, contentLength, missing } = collectUploadUrlParams(options, env)
+  const { appId, fileName, contentLength, file, derivedFromFile, missing } = collectUploadUrlParams(
+    options,
+    env,
+    renderHuaweiClientCredentialsUploadUrlHelp,
+  )
   const clientId = options.get(OPTION_CLIENT_ID) ?? readEnv(env, ENV_CLIENT_ID)
   const clientSecret = options.get(OPTION_CLIENT_SECRET) ?? readEnv(env, ENV_CLIENT_SECRET)
   const token = options.get(OPTION_TOKEN) ?? readEnv(env, ENV_TOKEN)
@@ -1035,6 +1122,8 @@ async function runHuaweiClientCredentialsUploadUrl(argv, env) {
     appId,
     fileName,
     contentLength,
+    file,
+    derivedFromFile,
     apiBase,
     verbose,
   })
@@ -1066,7 +1155,7 @@ function renderHuaweiHelp() {
     notes: [
       '示例:',
       `  ${PROGRAM} huawei service-account --kid <密钥ID> --iss <签发者> --private-key ./private.pem`,
-      `  ${PROGRAM} huawei service-account-upload-url --app-id <应用ID> --file-name a1.apk --content-length 111223 \\`,
+      `  ${PROGRAM} huawei service-account-upload-url --app-id <应用ID> --file ./a1.apk \\`,
       `    --kid <密钥ID> --iss <签发者> --private-key ./private.pem`,
     ],
   })
@@ -1168,14 +1257,26 @@ const UPLOAD_URL_DOC_URL =
  */
 const UPLOAD_URL_PARAM_OPTIONS = [
   ['--app-id <应用 ID>', 'AppGallery Connect 的 appId（非负整数），必填'],
-  ['--file-name <文件名>', '上传的文件名，如 a1.apk，必填'],
-  ['--content-length <字节>', '文件大小（字节，非负整数），必填'],
+  ['--file <文件>', '本地文件路径：用它的文件名补 --file-name、用它的字节数补 --content-length'],
+  ['--file-name <文件名>', '上传的文件名，如 a1.apk；给出 --file 且未显式指定时取该文件的文件名'],
+  ['--content-length <字节>', '文件大小（字节，非负整数）；给出 --file 且未显式指定时取该文件大小'],
 ]
 
 const UPLOAD_URL_PARAM_ENV = [
   [ENV_APP_ID, '应用 ID，等价于 --app-id'],
+  [ENV_FILE, '本地文件路径，等价于 --file'],
   [ENV_FILE_NAME, '文件名，等价于 --file-name'],
   [ENV_CONTENT_LENGTH, '文件大小（字节），等价于 --content-length'],
+]
+
+/**
+ * 两个 upload-url 命令共用的「应用与文件参数」说明：把 --file 的补缺规则一次讲清。
+ * 规则本身写在 collectUploadUrlParams 里，这里只是同一套规则的文字版，改一处必须改另一处。
+ */
+const UPLOAD_URL_FILE_NOTES = [
+  `说明: ${OPTION_FILE} 只用来补缺失项：${OPTION_FILE_NAME} 取该文件的文件名，${OPTION_CONTENT_LENGTH} 取该文件的字节数`,
+  `说明: ${OPTION_FILE_NAME} / ${OPTION_CONTENT_LENGTH} 显式给出（选项或环境变量）时以显式值为准，此时不再读文件`,
+  `说明: 只有真的需要从文件推导时才读它，因此那时路径必须存在且是普通文件，否则直接报用法错误`,
 ]
 
 /** 两个 upload-url 命令共用的「输出」与「退出代码」小节 */
@@ -1203,8 +1304,9 @@ function uploadUrlExampleNotes(command) {
   return [
     '说明: urlInfo.url 是上传地址，urlInfo.method 与 urlInfo.headers 是上传必须使用的方法与请求头',
     '上传示例（请求头见 urlInfo.headers，其中有 OBS 签名需要的信息）:',
-    `  RESP=$(${PROGRAM} huawei ${command} --app-id <应用ID> --file-name a1.apk --content-length 111223)`,
+    `  RESP=$(${PROGRAM} huawei ${command} --app-id <应用ID> --file ./a1.apk)`,
     `  curl -X "$(jq -r .urlInfo.method <<<"$RESP")" -T a1.apk "$(jq -r .urlInfo.url <<<"$RESP")"`,
+    ...UPLOAD_URL_FILE_NOTES,
     `说明: 默认只把响应 JSON 写到 stdout，加 --verbose 才输出运行日志（stderr，先日志后结果）`,
     `说明: 私钥路径、Token、client_id 只以掩码形式出现在日志里，私钥数据不会写入日志`,
     `原始文档: ${UPLOAD_URL_DOC_URL}`,
@@ -1265,9 +1367,11 @@ function renderHuaweiServiceAccountUploadUrlHelp() {
     ],
     notes: [
       '示例:',
-      `  ${PROGRAM} huawei service-account-upload-url --app-id <应用ID> --file-name a1.apk --content-length 111223 --token <Token>`,
-      `  ${PROGRAM} huawei service-account-upload-url --app-id <应用ID> --file-name a1.apk --content-length 111223 \\`,
+      `  ${PROGRAM} huawei service-account-upload-url --app-id <应用ID> --file ./a1.apk --token <Token>`,
+      `  ${PROGRAM} huawei service-account-upload-url --app-id <应用ID> --file ./a1.apk \\`,
       `    --kid <密钥ID> --iss <签发者> --private-key ./private.pem`,
+      `  ${PROGRAM} huawei service-account-upload-url --app-id <应用ID> --file ./a1.apk --file-name a1-release.apk`,
+      `  ${ENV_APP_ID}=<应用ID> ${ENV_FILE}=./a1.apk ${ENV_TOKEN}=<Token> ${PROGRAM} huawei service-account-upload-url`,
       `  ${ENV_APP_ID}=<应用ID> ${ENV_FILE_NAME}=a1.apk ${ENV_CONTENT_LENGTH}=111223 ${ENV_TOKEN}=<Token> ${PROGRAM} huawei service-account-upload-url`,
       '',
       `说明: --iat 与 ${ENV_IAT} 只作用于本地签发的 JWT，用 --token 时忽略`,
@@ -1327,10 +1431,10 @@ function renderHuaweiClientCredentialsUploadUrlHelp() {
     ],
     notes: [
       '示例:',
-      `  ${PROGRAM} huawei client-credentials-upload-url --app-id <应用ID> --file-name a1.apk --content-length 111223 --token <access_token>`,
-      `  ${PROGRAM} huawei client-credentials-upload-url --app-id <应用ID> --file-name a1.apk --content-length 111223 \\`,
+      `  ${PROGRAM} huawei client-credentials-upload-url --app-id <应用ID> --file ./a1.apk --token <access_token>`,
+      `  ${PROGRAM} huawei client-credentials-upload-url --app-id <应用ID> --file ./a1.apk \\`,
       `    --client-id <客户端ID> --client-secret <客户端密钥>`,
-      `  ${ENV_APP_ID}=<应用ID> ${ENV_FILE_NAME}=a1.apk ${ENV_CONTENT_LENGTH}=111223 \\`,
+      `  ${ENV_APP_ID}=<应用ID> ${ENV_FILE}=./a1.apk \\`,
       `    ${ENV_CLIENT_ID}=<客户端ID> ${ENV_CLIENT_SECRET}=<密钥> ${PROGRAM} huawei client-credentials-upload-url`,
       '',
       `说明: 用 --token 时，只要给得出 client_id（${OPTION_CLIENT_ID} 或 ${ENV_CLIENT_ID}）就一并作为 client_id 头发出`,

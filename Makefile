@@ -18,6 +18,8 @@ SHELL := /usr/bin/env bash
 #                             等价于 client-credentials 的 --client-id / --client-secret
 #   HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH
 #                             等价于两个 *-upload-url 的 --app-id / --file-name / --content-length
+#   HUAWEI_FILE               本地文件路径，等价于两个 *-upload-url 的 --file：
+#                             给出后自动用它的文件名补 --file-name、用它的字节数补 --content-length
 #   HUAWEI_TOKEN              等价于两个 *-upload-url 的 --token（JWT 或 access_token）
 #   HUAWEI_VERBOSE            等价于 --verbose：1/true/yes/on 开启日志，0/false/no/off 关闭
 #   HUAWEI_ARGS               追加到命令末尾的额外参数，例如 HUAWEI_ARGS="--verbose"
@@ -39,6 +41,7 @@ HUAWEI_IAT ?=
 HUAWEI_CLIENT_ID ?=
 HUAWEI_CLIENT_SECRET ?=
 HUAWEI_APP_ID ?=
+HUAWEI_FILE ?=
 HUAWEI_FILE_NAME ?=
 HUAWEI_CONTENT_LENGTH ?=
 HUAWEI_TOKEN ?=
@@ -53,8 +56,8 @@ huaweiOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
 HUAWEI_SERVICE_ACCOUNT_ARGS = $(call huaweiOption,HUAWEI_KID,--kid) $(call huaweiOption,HUAWEI_ISS,--iss) $(call huaweiOption,HUAWEI_PRIVATE_KEY,--private-key) $(call huaweiOption,HUAWEI_PRIVATE_KEY_DATA,--private-key-data) $(call huaweiOption,HUAWEI_IAT,--iat)
 
-# 两个 upload-url 命令共用的应用与文件参数（HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH / HUAWEI_TOKEN）
-HUAWEI_UPLOAD_FILE_ARGS = $(call huaweiOption,HUAWEI_APP_ID,--app-id) $(call huaweiOption,HUAWEI_FILE_NAME,--file-name) $(call huaweiOption,HUAWEI_CONTENT_LENGTH,--content-length) $(call huaweiOption,HUAWEI_TOKEN,--token)
+# 两个 upload-url 命令共用的应用与文件参数（HUAWEI_APP_ID / HUAWEI_FILE / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH / HUAWEI_TOKEN）
+HUAWEI_UPLOAD_FILE_ARGS = $(call huaweiOption,HUAWEI_APP_ID,--app-id) $(call huaweiOption,HUAWEI_FILE,--file) $(call huaweiOption,HUAWEI_FILE_NAME,--file-name) $(call huaweiOption,HUAWEI_CONTENT_LENGTH,--content-length) $(call huaweiOption,HUAWEI_TOKEN,--token)
 
 # 组合 huawei service-account-upload-url 的参数：应用与文件参数在服务账号参数之前
 HUAWEI_UPLOAD_URL_ARGS = $(HUAWEI_UPLOAD_FILE_ARGS) $(HUAWEI_SERVICE_ACCOUNT_ARGS)
@@ -94,7 +97,7 @@ huawei-service-account: ## 华为 Service Account JWT（HUAWEI_KID / HUAWEI_ISS 
 huawei-service-account-upload-url-help: ## 华为 获取文件上传地址帮助文档
 	node src/publish-apk.js huawei service-account-upload-url --help
 
-huawei-service-account-upload-url: ## 华为 获取文件上传地址（HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH，Token 同 service-account 含 HUAWEI_IAT）
+huawei-service-account-upload-url: ## 华为 获取文件上传地址（HUAWEI_APP_ID，文件用 HUAWEI_FILE 或 HUAWEI_FILE_NAME+HUAWEI_CONTENT_LENGTH，Token 同 service-account 含 HUAWEI_IAT）
 	@node src/publish-apk.js huawei service-account-upload-url $(HUAWEI_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
 
 huawei-client-credentials-help: ## 华为 获取 access_token 帮助文档
@@ -106,7 +109,7 @@ huawei-client-credentials: ## 华为 获取 access_token（HUAWEI_CLIENT_ID / HU
 huawei-client-credentials-upload-url-help: ## 华为 获取文件上传地址（API 客户端）帮助文档
 	node src/publish-apk.js huawei client-credentials-upload-url --help
 
-huawei-client-credentials-upload-url: ## 华为 获取文件上传地址（API 客户端，HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH，凭证同 client-credentials，HUAWEI_VERBOSE 开启日志）
+huawei-client-credentials-upload-url: ## 华为 获取文件上传地址（API 客户端，HUAWEI_APP_ID，文件用 HUAWEI_FILE 或 HUAWEI_FILE_NAME+HUAWEI_CONTENT_LENGTH，凭证同 client-credentials，HUAWEI_VERBOSE 开启日志）
 	@node src/publish-apk.js huawei client-credentials-upload-url $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
 
 # ------------------------------------------------------------------ npm 发布物
