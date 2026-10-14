@@ -32,6 +32,9 @@
  *      确定 access_token（命令行 client-credentials 参数本地换取优先，其次 --token），
  *      再调同一个接口获取文件上传地址，并按 API 客户端方式同时携带 client_id 头，
  *      接口原始响应 JSON 写 stdout，退出代码 0
+ *
+ * 环境变量：每个带值的选项都有同名环境变量兜底（选项优先），见各命令帮助文档的「环境变量」小节；
+ * 开关型选项 --verbose 也有环境变量 HUAWEI_VERBOSE（1/true/yes/on 开启、0/false/no/off 关闭）。
  */
 import { existsSync, readFileSync } from 'node:fs'
 
@@ -127,6 +130,15 @@ const ENV_ISS = 'HUAWEI_ISS'
 const ENV_PRIVATE_KEY = 'HUAWEI_PRIVATE_KEY'
 /** 私钥 PEM 数据，等价于 --private-key-data（与 ENV_PRIVATE_KEY 二选一） */
 const ENV_PRIVATE_KEY_DATA = 'HUAWEI_PRIVATE_KEY_DATA'
+/** JWT 签发时间（UTC 秒级时间戳），等价于 --iat */
+const ENV_IAT = 'HUAWEI_IAT'
+/**
+ * 开关型环境变量，等价于 --verbose。
+ *
+ * 开关型选项没有「值」的概念，而环境变量天生是字符串，因此取值只认白名单里的真值/假值
+ * （见 resolveVerbose）：`HUAWEI_VERBOSE=0` 必须真的关闭日志，而不是被当成「非空即开启」。
+ */
+const ENV_VERBOSE = 'HUAWEI_VERBOSE'
 
 /** huawei client-credentials：API 客户端 ID */
 const OPTION_CLIENT_ID = '--client-id'
@@ -189,6 +201,45 @@ const ENV_CONTENT_LENGTH = 'HUAWEI_CONTENT_LENGTH'
  * 另外本地联调时也可以指向自建服务。
  */
 const ENV_API_BASE = 'HUAWEI_API_BASE'
+
+// -------------------------------------------------------------- 开关型参数
+
+/** HUAWEI_VERBOSE 里代表「开启」的取值（大小写、首尾空白不敏感） */
+const VERBOSE_ON_VALUES = new Set(['1', 'true', 'yes', 'y', 'on'])
+/** HUAWEI_VERBOSE 里代表「关闭」的取值；空串由 readEnv 归为「未设置」 */
+const VERBOSE_OFF_VALUES = new Set(['0', 'false', 'no', 'n', 'off'])
+
+/**
+ * --verbose 的取值来源：命令行选项优先，其次环境变量 HUAWEI_VERBOSE。
+ *
+ * 四个 huawei 命令都只在「命令行没写 --verbose」时才看环境变量，
+ * 这样 `HUAWEI_VERBOSE=1 make huawei-service-account` 与写成选项的结果完全一致。
+ *
+ * 环境变量的值只认白名单：真值开启、假值关闭、其它值报用法错误。之所以不采用
+ * 「非空即开启」，是因为开关型选项没有值可写，`HUAWEI_VERBOSE=0` 这种明确关闭的写法
+ * 如果被当成开启，会在 CI 日志里凭空多出运行日志（其中含掩码后的凭证信息）；
+ * 反之若把无法识别的值悄悄当成关闭，排查时又会丢掉日志。两者都不如直接报错。
+ */
+function resolveVerbose(options, env, help) {
+  if (options.get(OPTION_VERBOSE) === true) {
+    return true
+  }
+  const value = readEnv(env, ENV_VERBOSE)
+  if (value === undefined) {
+    return false
+  }
+  const normalized = value.trim().toLowerCase()
+  if (VERBOSE_ON_VALUES.has(normalized)) {
+    return true
+  }
+  if (VERBOSE_OFF_VALUES.has(normalized)) {
+    return false
+  }
+  throw new UsageError(
+    `环境变量 ${ENV_VERBOSE} 的值无效: "${value}"（开启用 1/true/yes/on，关闭用 0/false/no/off）`,
+    help(),
+  )
+}
 
 // ------------------------------------------------------------------ 私钥读取
 
@@ -363,14 +414,16 @@ function resolveServiceAccountSigning(options, env, help) {
       ? privateKeyFromData(privateKeySource.data, help, privateKeySource.dataOrigin)
       : privateKeyFromFile(privateKeySource.path, help, privateKeySource.pathOrigin)
 
-  // --iat 可选：不传则取当前时间，传入时必须是 UTC 秒级时间戳
-  const iatOption = options.get(OPTION_IAT)
+  // --iat 可选：选项优先、环境变量其次，两处都没有则取当前时间，给出时必须是 UTC 秒级时间戳
+  const iatOption = options.get(OPTION_IAT) ?? readEnv(env, ENV_IAT)
   let iat
   if (iatOption !== undefined) {
     iat = Number(iatOption)
     if (!/^\d+$/.test(iatOption) || !Number.isSafeInteger(iat)) {
+      // 报错时点明值来自选项还是环境变量，否则只写 "--iat" 会让人找不到该改哪里
+      const source = options.has(OPTION_IAT) ? `选项 "${OPTION_IAT}"` : `环境变量 ${ENV_IAT}`
       throw new UsageError(
-        `选项 "${OPTION_IAT}" 需要 UTC 秒级时间戳（非负整数），实际收到 "${iatOption}"`,
+        `${source} 需要 UTC 秒级时间戳（非负整数），实际收到 "${iatOption}"`,
         help(),
       )
     }
@@ -420,7 +473,7 @@ function runHuaweiServiceAccount(argv, env) {
   }
 
   const options = parseOptions(argv, SERVICE_ACCOUNT_OPTIONS, renderHuaweiServiceAccountHelp, SERVICE_ACCOUNT_FLAGS)
-  const verbose = options.get(OPTION_VERBOSE) === true
+  const verbose = resolveVerbose(options, env, renderHuaweiServiceAccountHelp)
 
   const signed = issueServiceAccountJwt(options, env, renderHuaweiServiceAccountHelp)
   if (signed === null) {
@@ -607,7 +660,7 @@ async function runHuaweiClientCredentials(argv, env) {
     renderHuaweiClientCredentialsHelp,
     CLIENT_CREDENTIALS_FLAGS,
   )
-  const verbose = options.get(OPTION_VERBOSE) === true
+  const verbose = resolveVerbose(options, env, renderHuaweiClientCredentialsHelp)
 
   const clientId = options.get(OPTION_CLIENT_ID) ?? readEnv(env, ENV_CLIENT_ID)
   const clientSecret = options.get(OPTION_CLIENT_SECRET) ?? readEnv(env, ENV_CLIENT_SECRET)
@@ -798,7 +851,7 @@ async function runHuaweiServiceAccountUploadUrl(argv, env) {
     renderHuaweiServiceAccountUploadUrlHelp,
     SERVICE_ACCOUNT_UPLOAD_URL_FLAGS,
   )
-  const verbose = options.get(OPTION_VERBOSE) === true
+  const verbose = resolveVerbose(options, env, renderHuaweiServiceAccountUploadUrlHelp)
 
   const { appId, fileName, contentLength, missing } = collectUploadUrlParams(options, env)
   const token = options.get(OPTION_TOKEN) ?? readEnv(env, ENV_TOKEN)
@@ -886,7 +939,7 @@ async function runHuaweiClientCredentialsUploadUrl(argv, env) {
     renderHuaweiClientCredentialsUploadUrlHelp,
     CLIENT_CREDENTIALS_UPLOAD_URL_FLAGS,
   )
-  const verbose = options.get(OPTION_VERBOSE) === true
+  const verbose = resolveVerbose(options, env, renderHuaweiClientCredentialsUploadUrlHelp)
 
   const { appId, fileName, contentLength, missing } = collectUploadUrlParams(options, env)
   const clientId = options.get(OPTION_CLIENT_ID) ?? readEnv(env, ENV_CLIENT_ID)
@@ -1040,8 +1093,8 @@ function renderHuaweiServiceAccountHelp() {
           ['--iss <签发者>', 'JWT 载荷中的 iss，必填'],
           ['--private-key <文件>', '私钥 PEM 文件路径（与 --private-key-data 二选一，必填）'],
           ['--private-key-data <PEM>', '直接传入私钥 PEM 数据（与 --private-key 二选一，必填）'],
-          ['--iat <秒>', 'JWT 签发时间（UTC 秒级时间戳），默认当前时间'],
-          ['--verbose', '输出运行日志（默认只输出结果，日志不打印）'],
+          ['--iat <秒>', `JWT 签发时间（UTC 秒级时间戳），默认当前时间（可用 ${ENV_IAT} 补齐）`],
+          ['--verbose', `输出运行日志（默认只输出结果，日志不打印）；命令行未给出时读取 ${ENV_VERBOSE}`],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -1052,6 +1105,8 @@ function renderHuaweiServiceAccountHelp() {
           [ENV_ISS, '签发者，等价于 --iss'],
           [ENV_PRIVATE_KEY, '私钥 PEM 文件路径，等价于 --private-key'],
           [ENV_PRIVATE_KEY_DATA, '私钥 PEM 数据，等价于 --private-key-data'],
+          [ENV_IAT, 'JWT 签发时间（UTC 秒级时间戳），等价于 --iat'],
+          [ENV_VERBOSE, '输出运行日志，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
         ],
       },
       {
@@ -1067,7 +1122,7 @@ function renderHuaweiServiceAccountHelp() {
         entries: [
           ['iss', `JWT 签发者；取自 --iss，未指定时读取环境变量 ${ENV_ISS}；日志中部分掩码显示（如 abcd****wxyz）`],
           ['aud', `${JWT_CLAIM_AUD}（华为固定值，不可修改）`],
-          ['iat', 'JWT 签发时间，UTC 秒级时间戳；默认当前时间，可用 --iat 覆盖'],
+          ['iat', `JWT 签发时间，UTC 秒级时间戳；默认当前时间，可用 --iat 或环境变量 ${ENV_IAT} 覆盖`],
           ['exp', `JWT 到期时间，UTC 秒级时间戳；恒为 iat + ${JWT_CLAIM_EXP_OFFSET_SECONDS} 秒`],
         ],
       },
@@ -1086,11 +1141,13 @@ function renderHuaweiServiceAccountHelp() {
       `  ${PROGRAM} huawei service-account --kid <密钥ID> --iss <签发者> --private-key-data "$(cat private.pem)"`,
       `  ${ENV_KID}=<密钥ID> ${ENV_ISS}=<签发者> ${ENV_PRIVATE_KEY}=./private.pem ${PROGRAM} huawei service-account`,
       `  ${ENV_KID}=<密钥ID> ${ENV_ISS}=<签发者> ${ENV_PRIVATE_KEY_DATA}="$(cat private.pem)" ${PROGRAM} huawei service-account`,
+      `  ${ENV_KID}=<密钥ID> ${ENV_ISS}=<签发者> ${ENV_PRIVATE_KEY}=./private.pem ${ENV_IAT}=1700000000 ${PROGRAM} huawei service-account`,
       '',
       `说明: --private-key 与 --private-key-data 不能同时使用；环境变量层两者都有时优先用 ${ENV_PRIVATE_KEY_DATA}（数据优先）并在 stderr 提示`,
       `说明: 私钥路径在错误信息与 --verbose 日志中掩码显示（如 /Use*****.pem），私钥数据不会写入日志`,
       `说明: 命令行给出 --private-key / --private-key-data 时不再读取上述两个私钥环境变量`,
-      `说明: 默认只把 JWT 写到 stdout，不打印任何日志；加 --verbose 才输出运行日志（stderr，先日志后结果）`,
+      `说明: --iat、--verbose 都是「选项优先、环境变量兜底」：命令行给出选项时 ${ENV_IAT} / ${ENV_VERBOSE} 不再生效`,
+      `说明: 默认只把 JWT 写到 stdout，不打印任何日志；加 --verbose（或 ${ENV_VERBOSE}=1）才输出运行日志（stderr，先日志后结果）`,
       `说明: 输出的 PS256 JWT 可直接作为 Authorization: Bearer 令牌使用，无需再换 access_token`,
       `原始文档: ${AUTH_DOC_URL}`,
     ],
@@ -1166,8 +1223,8 @@ function renderHuaweiServiceAccountUploadUrlHelp() {
           ['--iss <签发者>', `service-account：JWT 载荷中的 iss（可用 ${ENV_ISS} 补齐）`],
           ['--private-key <文件>', 'service-account：私钥 PEM 文件路径（与 --private-key-data 二选一）'],
           ['--private-key-data <PEM>', 'service-account：直接传入私钥 PEM 数据（与 --private-key 二选一）'],
-          ['--iat <秒>', 'service-account：JWT 签发时间（UTC 秒级时间戳），默认当前时间'],
-          ['--verbose', '输出运行日志（默认只输出结果，日志不打印）'],
+          ['--iat <秒>', `service-account：JWT 签发时间（UTC 秒级时间戳），默认当前时间（可用 ${ENV_IAT} 补齐）`],
+          ['--verbose', `输出运行日志（默认只输出结果，日志不打印）；命令行未给出时读取 ${ENV_VERBOSE}`],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -1180,6 +1237,8 @@ function renderHuaweiServiceAccountUploadUrlHelp() {
           [ENV_ISS, 'service-account 签发者，等价于 --iss'],
           [ENV_PRIVATE_KEY, 'service-account 私钥 PEM 文件路径'],
           [ENV_PRIVATE_KEY_DATA, 'service-account 私钥 PEM 数据'],
+          [ENV_IAT, 'service-account JWT 签发时间（UTC 秒级时间戳），等价于 --iat'],
+          [ENV_VERBOSE, '输出运行日志，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
           [ENV_API_BASE, `接口域名，默认 ${API_BASE_CN}（其他区域或本地联调时覆盖）`],
         ],
       },
@@ -1208,6 +1267,7 @@ function renderHuaweiServiceAccountUploadUrlHelp() {
       `    --kid <密钥ID> --iss <签发者> --private-key ./private.pem`,
       `  ${ENV_APP_ID}=<应用ID> ${ENV_FILE_NAME}=a1.apk ${ENV_CONTENT_LENGTH}=111223 ${ENV_TOKEN}=<Token> ${PROGRAM} huawei service-account-upload-url`,
       '',
+      `说明: --iat 与 ${ENV_IAT} 只作用于本地签发的 JWT，用 --token 时忽略`,
       ...uploadUrlExampleNotes('service-account-upload-url'),
     ],
   })
@@ -1229,7 +1289,7 @@ function renderHuaweiClientCredentialsUploadUrlHelp() {
             `client-credentials：API 客户端 ID，给出后本地换取 access_token（可用 ${ENV_CLIENT_ID} 补齐）`,
           ],
           ['--client-secret <密钥>', `client-credentials：API 客户端密钥（可用 ${ENV_CLIENT_SECRET} 补齐）`],
-          ['--verbose', '输出运行日志（默认只输出结果，日志不打印）'],
+          ['--verbose', `输出运行日志（默认只输出结果，日志不打印）；命令行未给出时读取 ${ENV_VERBOSE}`],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -1240,6 +1300,7 @@ function renderHuaweiClientCredentialsUploadUrlHelp() {
           [ENV_TOKEN, 'access_token，等价于 --token'],
           [ENV_CLIENT_ID, 'API 客户端 ID，等价于 --client-id'],
           [ENV_CLIENT_SECRET, 'API 客户端密钥，等价于 --client-secret'],
+          [ENV_VERBOSE, '输出运行日志，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
           [ENV_API_BASE, `接口域名，默认 ${API_BASE_CN}（其他区域或本地联调时覆盖）`],
         ],
       },
@@ -1287,7 +1348,7 @@ function renderHuaweiClientCredentialsHelp() {
         entries: [
           ['--client-id <客户端 ID>', 'API 客户端 ID，必填'],
           ['--client-secret <密钥>', 'API 客户端密钥，必填'],
-          ['--verbose', '输出运行日志（默认只输出 access_token，日志不打印）'],
+          ['--verbose', `输出运行日志（默认只输出 access_token，日志不打印）；命令行未给出时读取 ${ENV_VERBOSE}`],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -1296,6 +1357,7 @@ function renderHuaweiClientCredentialsHelp() {
         entries: [
           [ENV_CLIENT_ID, 'API 客户端 ID，等价于 --client-id'],
           [ENV_CLIENT_SECRET, 'API 客户端密钥，等价于 --client-secret'],
+          [ENV_VERBOSE, '输出运行日志，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
           [ENV_API_BASE, `接口域名，默认 ${API_BASE_CN}（其他区域或本地联调时覆盖）`],
         ],
       },
