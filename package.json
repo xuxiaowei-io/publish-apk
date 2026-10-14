@@ -1,7 +1,7 @@
 {
   "name": "publish-apk",
   "version": "0.0.1-alpha.2",
-  "description": "发布 APP",
+  "description": "发布 华为 Android .apk、Harmony .app",
   "keywords": [
     "huawei",
     "agc",
