@@ -17,10 +17,16 @@ SHELL := /usr/bin/env bash
 #   HUAWEI_CLIENT_ID / HUAWEI_CLIENT_SECRET
 #                             等价于 client-credentials 的 --client-id / --client-secret
 #   HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH
-#                             等价于两个 *-upload-url 的 --app-id / --file-name / --content-length
-#   HUAWEI_FILE               本地文件路径，等价于两个 *-upload-url 的 --file：
-#                             给出后自动用它的文件名补 --file-name、用它的字节数补 --content-length
-#   HUAWEI_TOKEN              等价于两个 *-upload-url 的 --token（JWT 或 access_token）
+#                             等价于上传类命令的 --app-id / --file-name / --content-length
+#   HUAWEI_FILE               本地文件路径，等价于上传类命令的 --file：
+#                             *-upload-url 用它补 --file-name 与 --content-length
+#                             *-upload-file 只支持这种写法（必须给出本地文件）
+#   HUAWEI_TOKEN              等价于上传类命令的 --token（JWT 或 access_token）
+#   HUAWEI_OBJECT_ID          等价于 *-upload-file-package-info-update 的 --object-id
+#                             （给出后跳过上传，只做登记；不给则由命令自己上传）
+#   HUAWEI_RELEASE_TYPE / HUAWEI_RELEASE_PHASE
+#                             等价于 *-upload-file-package-info-update 的 --release-type / --release-phase
+#                             （取值范围随安装包后缀不同：.app 用 1/7 与 0/3；.apk 等用 1/3，没有 release-phase）
 #   HUAWEI_VERBOSE            等价于 --verbose：1/true/yes/on 开启日志，0/false/no/off 关闭
 #   HUAWEI_ARGS               追加到命令末尾的额外参数，例如 HUAWEI_ARGS="--verbose"
 #   （HUAWEI_API_BASE 只有环境变量形式，命令直接读取，不作变量转发）
@@ -45,6 +51,9 @@ HUAWEI_FILE ?=
 HUAWEI_FILE_NAME ?=
 HUAWEI_CONTENT_LENGTH ?=
 HUAWEI_TOKEN ?=
+HUAWEI_OBJECT_ID ?=
+HUAWEI_RELEASE_TYPE ?=
+HUAWEI_RELEASE_PHASE ?=
 HUAWEI_VERBOSE ?=
 HUAWEI_ARGS ?=
 
@@ -56,7 +65,8 @@ huaweiOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
 HUAWEI_SERVICE_ACCOUNT_ARGS = $(call huaweiOption,HUAWEI_KID,--kid) $(call huaweiOption,HUAWEI_ISS,--iss) $(call huaweiOption,HUAWEI_PRIVATE_KEY,--private-key) $(call huaweiOption,HUAWEI_PRIVATE_KEY_DATA,--private-key-data) $(call huaweiOption,HUAWEI_IAT,--iat)
 
-# 两个 upload-url 命令共用的应用与文件参数（HUAWEI_APP_ID / HUAWEI_FILE / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH / HUAWEI_TOKEN）
+# 四个上传类命令（*-upload-url 与 *-upload-file）共用的应用与文件参数
+# （HUAWEI_APP_ID / HUAWEI_FILE / HUAWEI_FILE_NAME / HUAWEI_CONTENT_LENGTH / HUAWEI_TOKEN）
 HUAWEI_UPLOAD_FILE_ARGS = $(call huaweiOption,HUAWEI_APP_ID,--app-id) $(call huaweiOption,HUAWEI_FILE,--file) $(call huaweiOption,HUAWEI_FILE_NAME,--file-name) $(call huaweiOption,HUAWEI_CONTENT_LENGTH,--content-length) $(call huaweiOption,HUAWEI_TOKEN,--token)
 
 # 组合 huawei service-account-upload-url 的参数：应用与文件参数在服务账号参数之前
@@ -68,18 +78,33 @@ HUAWEI_CLIENT_CREDENTIALS_ARGS = $(call huaweiOption,HUAWEI_CLIENT_ID,--client-i
 # 组合 huawei client-credentials-upload-url 的参数：应用与文件参数在客户端参数之前
 HUAWEI_CLIENT_CREDENTIALS_UPLOAD_URL_ARGS = $(HUAWEI_UPLOAD_FILE_ARGS) $(HUAWEI_CLIENT_CREDENTIALS_ARGS)
 
+# 两个 package-info-update 命令共用的登记参数
+# （HUAWEI_APP_ID / HUAWEI_FILE_NAME / HUAWEI_OBJECT_ID / HUAWEI_RELEASE_TYPE / HUAWEI_RELEASE_PHASE / HUAWEI_TOKEN）
+HUAWEI_PACKAGE_INFO_ARGS = $(call huaweiOption,HUAWEI_APP_ID,--app-id) $(call huaweiOption,HUAWEI_FILE_NAME,--file-name) $(call huaweiOption,HUAWEI_OBJECT_ID,--object-id) $(call huaweiOption,HUAWEI_RELEASE_TYPE,--release-type) $(call huaweiOption,HUAWEI_RELEASE_PHASE,--release-phase) $(call huaweiOption,HUAWEI_TOKEN,--token)
+
+# 组合 huawei service-account-upload-file-package-info-update 的参数
+# （未给 HUAWEI_OBJECT_ID 时要自己上传，所以还要带 --file：复用 HUAWEI_UPLOAD_FILE_ARGS 里的 --file）
+HUAWEI_SERVICE_ACCOUNT_UPLOAD_FILE_PACKAGE_INFO_ARGS = $(HUAWEI_PACKAGE_INFO_ARGS) $(call huaweiOption,HUAWEI_FILE,--file) $(HUAWEI_SERVICE_ACCOUNT_ARGS)
+
+# 组合 huawei client-credentials-upload-file-package-info-update 的参数
+HUAWEI_CLIENT_CREDENTIALS_UPLOAD_FILE_PACKAGE_INFO_ARGS = $(HUAWEI_PACKAGE_INFO_ARGS) $(call huaweiOption,HUAWEI_FILE,--file) $(HUAWEI_CLIENT_CREDENTIALS_ARGS)
+
 # Display help information with colored output
 # Parses comments with '##' and formats them nicely
 help: ## Show help information
-	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9._-]+:.*?## / {printf "\033[36m%-40s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9._-]+:.*?## / {printf "\033[36m%-70s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
 
 # Mark targets as phony (not actual files)
 .PHONY: help h \
 	huawei-help \
 	huawei-service-account-help huawei-service-account \
 	huawei-service-account-upload-url-help huawei-service-account-upload-url \
+	huawei-service-account-upload-file-help huawei-service-account-upload-file \
+	huawei-service-account-upload-file-package-info-update-help huawei-service-account-upload-file-package-info-update \
 	huawei-client-credentials-help huawei-client-credentials \
 	huawei-client-credentials-upload-url-help huawei-client-credentials-upload-url \
+	huawei-client-credentials-upload-file-help huawei-client-credentials-upload-file \
+	huawei-client-credentials-upload-file-package-info-update-help huawei-client-credentials-upload-file-package-info-update \
 	pack-check
 
 h: ## 帮助文档
@@ -100,6 +125,12 @@ huawei-service-account-upload-url-help: ## 华为 获取文件上传地址帮助
 huawei-service-account-upload-url: ## 华为 获取文件上传地址（HUAWEI_APP_ID，文件用 HUAWEI_FILE 或 HUAWEI_FILE_NAME+HUAWEI_CONTENT_LENGTH，Token 同 service-account 含 HUAWEI_IAT）
 	@node src/publish-apk.js huawei service-account-upload-url $(HUAWEI_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
 
+huawei-service-account-upload-file-help: ## 华为 上传文件帮助文档
+	node src/publish-apk.js huawei service-account-upload-file --help
+
+huawei-service-account-upload-file: ## 华为 上传文件（HUAWEI_APP_ID / HUAWEI_FILE 必填，Token 同 service-account 含 HUAWEI_IAT，输出 objectId）
+	@node src/publish-apk.js huawei service-account-upload-file $(HUAWEI_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
+
 huawei-client-credentials-help: ## 华为 获取 access_token 帮助文档
 	node src/publish-apk.js huawei client-credentials --help
 
@@ -111,6 +142,24 @@ huawei-client-credentials-upload-url-help: ## 华为 获取文件上传地址（
 
 huawei-client-credentials-upload-url: ## 华为 获取文件上传地址（API 客户端，HUAWEI_APP_ID，文件用 HUAWEI_FILE 或 HUAWEI_FILE_NAME+HUAWEI_CONTENT_LENGTH，凭证同 client-credentials，HUAWEI_VERBOSE 开启日志）
 	@node src/publish-apk.js huawei client-credentials-upload-url $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
+
+huawei-client-credentials-upload-file-help: ## 华为 上传文件（API 客户端）帮助文档
+	node src/publish-apk.js huawei client-credentials-upload-file --help
+
+huawei-client-credentials-upload-file: ## 华为 上传文件（API 客户端，HUAWEI_APP_ID / HUAWEI_FILE 必填，凭证同 client-credentials，输出 objectId）
+	@node src/publish-apk.js huawei client-credentials-upload-file $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_URL_ARGS) $(HUAWEI_ARGS)
+
+huawei-service-account-upload-file-package-info-update-help: ## 华为 上传文件并登记软件包帮助文档
+	node src/publish-apk.js huawei service-account-upload-file-package-info-update --help
+
+huawei-service-account-upload-file-package-info-update: ## 华为 上传文件并登记软件包（HUAWEI_APP_ID / HUAWEI_FILE_NAME 必填；未给 HUAWEI_OBJECT_ID 时自己上传，要 HUAWEI_FILE；输出 objectId）
+	@node src/publish-apk.js huawei service-account-upload-file-package-info-update $(HUAWEI_SERVICE_ACCOUNT_UPLOAD_FILE_PACKAGE_INFO_ARGS) $(HUAWEI_ARGS)
+
+huawei-client-credentials-upload-file-package-info-update-help: ## 华为 上传文件并登记软件包（API 客户端）帮助文档
+	node src/publish-apk.js huawei client-credentials-upload-file-package-info-update --help
+
+huawei-client-credentials-upload-file-package-info-update: ## 华为 上传文件并登记软件包（API 客户端，HUAWEI_APP_ID / HUAWEI_FILE_NAME 必填；未给 HUAWEI_OBJECT_ID 时自己上传，要 HUAWEI_FILE；输出 objectId）
+	@node src/publish-apk.js huawei client-credentials-upload-file-package-info-update $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_FILE_PACKAGE_INFO_ARGS) $(HUAWEI_ARGS)
 
 # ------------------------------------------------------------------ npm 发布物
 
