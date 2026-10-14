@@ -1073,8 +1073,11 @@ function renderHuaweiHelp() {
 }
 
 /**
- * 华为原始文档：获取服务器鉴权（Service Account JWT）。
+ * 华为原始文档：获取服务端授权（服务器鉴权）。
  *
+ * 华为把两套鉴权方式写在同一篇文档里，本项目两套都实现，因此共享同一个出处：
+ *   - Service Account 方式：私钥本地签发 PS256 JWT（见 huawei service-account）
+ *   - API 客户端方式：client_id + client_secret 换取 access_token（见 huawei client-credentials）
  * 帮助文档里给出出处，便于对照华为侧的参数含义与固定值要求。
  */
 const AUTH_DOC_URL =
