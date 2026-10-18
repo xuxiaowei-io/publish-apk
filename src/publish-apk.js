@@ -46,10 +46,25 @@ import { huaweiCommand } from './huawei.js'
  */
 const VENDORS = [huaweiCommand]
 
-const { version } = createRequire(import.meta.url)('../package.json')
+const { version, author } = createRequire(import.meta.url)('../package.json')
+
+/**
+ * 作者信息条目：package.json 的 author 可以是字符串，也可以是 { name, email, url } 对象。
+ * 只输出给出的字段，避免帮助文档里出现「主页: undefined」这类空行。
+ */
+function authorEntries(value) {
+  if (typeof value === 'string') return [['姓名', value]]
+  if (value === null || typeof value !== 'object') return []
+  return [
+    ['姓名', value.name],
+    ['主页', value.url],
+    ['邮箱', value.email],
+  ].filter(([, text]) => typeof text === 'string' && text !== '')
+}
 
 /** 根帮助文档：无参数、help、--help、-h */
 function renderRootHelp() {
+  const authors = authorEntries(author)
   return renderHelp({
     title: `${PROGRAM} - 发布 APP`,
     usage: [`${PROGRAM} [命令] [选项]`],
@@ -68,6 +83,7 @@ function renderRootHelp() {
           ['-v, --version', '显示版本号'],
         ],
       },
+      ...(authors.length > 0 ? [{ title: '作者', entries: authors }] : []),
     ],
     notes: [
       '示例:',
