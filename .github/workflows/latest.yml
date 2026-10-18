@@ -39,6 +39,10 @@ jobs:
           registry-url: https://registry.npmjs.org
           package-manager-cache: false  # never use caching in release builds
 
+      - name: Publish to npm（test）
+        run: |
+          npm publish --tag "alpha"
+
       - name: Resolve package name and version
         id: resolve
         env:
