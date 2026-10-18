@@ -1,0 +1,90 @@
+# Promote an already published version to the npm "latest" dist-tag.
+#
+# Trusted publishing (OIDC) is used instead of a long-lived token:
+# https://docs.npmjs.com/trusted-publishers
+# The package's trusted publisher configuration must have "Allow npm dist-tag"
+# enabled, otherwise this workflow cannot modify dist-tags.
+#
+# The source tree is not needed for a dist-tag change, but package.json is read
+# so the package name is never hard-coded.
+
+name: Set latest tag
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to set as latest (for example 0.0.1-alpha.4 or v0.0.1-alpha.4)'
+        required: true
+        type: string
+
+permissions:
+  id-token: write  # Required for OIDC
+  contents: read
+
+concurrency:
+  group: npm-latest
+  cancel-in-progress: false
+
+jobs:
+  latest:
+    runs-on: ubuntu-latest
+    steps:
+
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          registry-url: https://registry.npmjs.org
+          package-manager-cache: false  # never use caching in release builds
+
+      - name: Resolve package name and version
+        id: resolve
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+        run: |
+          version="${INPUT_VERSION#v}"
+          if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "::error::Invalid version: $INPUT_VERSION"
+            exit 1
+          fi
+          name="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).name')"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "Promoting $name@$version to latest"
+
+      - name: Verify version is published
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.name }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          published="$(npm view "$PACKAGE@$VERSION" version)"
+          if [ "$published" != "$VERSION" ]; then
+            echo "::error::$PACKAGE@$VERSION is not published (registry returned '$published')"
+            exit 1
+          fi
+
+      - name: Set latest dist-tag
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.name }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          if ! npm dist-tag add "$PACKAGE@$VERSION" latest; then
+            echo "::error::Failed to update dist-tags. Make sure the package's trusted publisher configuration has 'Allow npm dist-tag' enabled."
+            exit 1
+          fi
+
+      - name: Show dist-tags
+        env:
+          PACKAGE: ${{ steps.resolve.outputs.name }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+        run: |
+          dist_tags="$(npm view "$PACKAGE" dist-tags --json)"
+          echo "$dist_tags"
+          {
+            echo "### $PACKAGE latest -> $VERSION"
+            echo '```json'
+            echo "$dist_tags"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
