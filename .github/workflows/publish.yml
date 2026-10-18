@@ -54,7 +54,7 @@ jobs:
           node src/publish-apk.js huawei client-credentials-upload-url --help > /dev/null
           node src/publish-apk.js help > /dev/null
 
-      - name: Stage publish to npm
+      - name: Publish to npm
         run: |
           version="$(node -p 'JSON.parse(require("node:fs").readFileSync("package.json", "utf8")).version')"
           # npm refuses to publish a prerelease version without an explicit dist-tag,
@@ -67,4 +67,4 @@ jobs:
             dist_tag="latest"
           fi
           echo "Staging $version with dist-tag $dist_tag"
-          npm stage publish --tag "$dist_tag"
+          npm publish --tag "$dist_tag"
