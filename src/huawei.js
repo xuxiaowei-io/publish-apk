@@ -73,6 +73,7 @@ import {
   maskJwtClaims,
   maskJwtHeader,
   maskValue,
+  normalizePemText,
   signJwt,
 } from './jwt.js'
 
@@ -336,27 +337,11 @@ function resolveVerbose(options, env, help) {
 // ------------------------------------------------------------------ 私钥读取
 
 /**
- * 还原因环境文件 / shell 转义而变形的 PEM 文本。
- *
- * 典型场景：`.env` 里写成 `HUAWEI_PRIVATE_KEY="-----BEGIN...\nMIIB...\n"`，
- * 但 `source .env` 时 bash、zsh 都不会解释双引号内的 `\n`，变量里存的是
- * 「一行文本 + 字面量反斜杠 n」，PEM 解码必然失败（DECODER routines::unsupported）。
- *
- * PEM 的合法字符集（base64、+、/、=、-、换行）里没有反斜杠，
- * 因此在这些转义序列存在、且没有真实换行时把它们还原成换行是安全的。
- */
-function normalizePemText(text) {
-  if (text.includes('\n')) {
-    return text
-  }
-  return text.replaceAll('\\r\\n', '\n').replaceAll('\\n', '\n').replaceAll('\\r', '\n')
-}
-
-/**
  * 私钥来源在错误信息与日志里的展示文本。
  *
  * 路径属于敏感信息，统一掩码输出（如 /Use*****.pem）；PEM 数据、含换行的值和异常长的值
  * 连掩码都不做——几千个星号既刷屏又没意义——直接整体省略，只留字符数便于排查。
+ * （PEM 的转义还原见 src/jwt.js 的 normalizePemText。）
  */
 function describePrivateKeySource(value) {
   if (value.includes('-----BEGIN') || /[\r\n]/.test(value) || value.length > 120) {

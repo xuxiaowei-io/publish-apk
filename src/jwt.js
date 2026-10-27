@@ -1,7 +1,7 @@
 /**
  * JWT 工具：厂商无关。
  *
- * 这里只做 JWT 本身的事情——时间戳、日志掩码、PS256 签名，
+ * 这里只做 JWT 本身的事情——时间戳、日志掩码、PEM 还原、PS256 签名，
  * 不包含任何厂商的固定值（华为的 typ/alg/aud/exp 偏移见 src/huawei.js）。
  *
  * 签名只使用 Node 内置的 node:crypto，不引入任何第三方依赖。
@@ -72,6 +72,25 @@ function base64UrlEncode(text) {
 const PS256_SIGN_OPTIONS = {
   padding: constants.RSA_PKCS1_PSS_PADDING,
   saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
+}
+
+/**
+ * 还原因环境文件 / shell 转义而变形的 PEM 文本。
+ *
+ * 典型场景：`.env` 里写成 `PRIVATE_KEY="-----BEGIN...\nMIIB...\n"`，
+ * 但 `source .env` 时 bash、zsh 都不会解释双引号内的 `\n`，变量里存的是
+ * 「一行文本 + 字面量反斜杠 n」，PEM 解码必然失败（DECODER routines::unsupported）。
+ *
+ * PEM 的合法字符集（base64、+、/、=、-、换行）里没有反斜杠，
+ * 因此在这些转义序列存在、且没有真实换行时把它们还原成换行是安全的。
+ *
+ * 放在厂商无关的 jwt.js 里，供华为私钥与 Google 服务账号 JSON 共用。
+ */
+export function normalizePemText(text) {
+  if (text.includes('\n')) {
+    return text
+  }
+  return text.replaceAll('\\r\\n', '\n').replaceAll('\\n', '\n').replaceAll('\\r', '\n')
 }
 
 /**
