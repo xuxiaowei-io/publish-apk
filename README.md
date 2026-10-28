@@ -1,27 +1,27 @@
 # publish-apk
 
-发布 APP 的命令行工具：为应用市场**获取鉴权令牌**、**获取文件上传地址**、**上传文件**并**登记软件包**，供上传/发布流水线使用。
-当前支持华为应用市场（AppGallery Connect / AGC Connect API）。
+发布 APP 的命令行工具：为应用市场**获取鉴权令牌**、**上传安装包**并**登记软件包 / 发布版本**，供上传/发布流水线使用。
+当前支持华为应用市场（AppGallery Connect / AGC Connect API）与 Google Play（Android Publisher API v3）。
 
 - 纯 Node.js 实现，**无任何第三方依赖**（只用 `node:crypto`、`node:fs`、内置 `fetch`）
 - `stdout` 只写结果、`stderr` 只写日志与错误，便于 `TOKEN=$(publish-apk …)` 与管道取用
-- 厂商隔离：根命令不认识任何厂商，华为相关实现全部在 [src/huawei.js](src/huawei.js)
+- 厂商隔离：根命令不认识任何厂商，华为相关实现全部在 [src/huawei.js](src/huawei.js)，Google Play 相关实现全部在 [src/google.js](src/google.js)
 
 > 状态：`0.0.1-alpha.x` 早期版本，参数与输出可能调整，请以 `--help` 为准。
 
-## 声明：与华为及其他应用商店无关
+## 声明：与各应用商店无关
 
-- 本项目是**个人/社区开源工具，不是华为官方产品**，与华为技术有限公司及其关联公司**没有任何隶属、合作、赞助或背书关系**。
-- 本项目与 Google Play、小米应用商店、OPPO 软件商店、vivo 应用商店等**任何其他应用商店/分发平台同样没有任何关系**。将来若新增对其他厂商的支持，同样与该厂商无隶属或背书关系。
-- "华为""HUAWEI""AppGallery""AppGallery Connect""AGC"等是华为的商标。本项目仅在**描述性意义**上使用这些名称（指明所调用的服务），不主张任何商标权利；[MIT 许可证](LICENSE) 也不授予任何商标使用权。
+- 本项目是**个人/社区开源工具，不是华为、Google 官方产品**，与华为技术有限公司、Google LLC 及其关联公司**没有任何隶属、合作、赞助或背书关系**。
+- 本项目与 Google Play、小米应用商店、OPPO 软件商店、vivo 应用商店等**任何应用商店/分发平台同样没有任何隶属、合作、赞助或背书关系**；支持某个平台只表示本工具能调用它的公开接口。
+- "华为""HUAWEI""AppGallery""AppGallery Connect""AGC""Google""Google Play""Android"等是各自权利人的商标。本项目仅在**描述性意义**上使用这些名称（指明所调用的服务），不主张任何商标权利；[MIT 许可证](LICENSE) 也不授予任何商标使用权。
 - 本项目调用的接口地址、路径、参数与错误码均来自厂商**公开文档**；帮助文档只做中文转述并给出原文链接，不复制厂商文档正文，见 [参考文档](#参考文档上游)。
 
 ## 免责声明与责任限制
 
 - 本软件按**"现状"（AS IS）**提供，不附带任何明示或默示担保，包括但不限于适销性、特定用途适用性及非侵权担保。
-- 本工具会使用**你提供的签名私钥 / 客户端密钥**调用厂商的接口。相关操作可能**直接影响线上发布**（创建版本、上传安装包、提交审核等），部分操作**不可撤销**。请先在小号/测试应用上验证，并自行做好密钥管理与版本备份。
+- 本工具会使用**你提供的签名私钥 / 客户端密钥**调用厂商的接口。相关操作可能**直接影响线上发布**（创建版本、上传安装包、提交审核、发布到轨道等），部分操作**不可撤销**。请先在小号/测试应用上验证，并自行做好密钥管理与版本备份。
 - 在任何情况下，作者或版权持有人均不对因使用或无法使用本软件而产生的任何索赔、损害或其他责任负责，无论其源自合同诉讼、侵权行为或其他方式。
-- 使用本工具还需遵守厂商的开发者协议与平台规则（如华为开发者协议、AGC 平台规范）、以及适用的法律法规。相关合规责任由使用者自行承担。
+- 使用本工具还需遵守厂商的开发者协议与平台规则（如华为开发者协议、AGC 平台规范、Google API 服务条款、Google Play 开发者计划政策）、以及适用的法律法规。相关合规责任由使用者自行承担。
 - 本节与 [LICENSE](LICENSE) 中的条款共同适用；若两者冲突，以 [LICENSE](LICENSE) 为准。本节不构成法律意见。
 
 ## 环境要求
@@ -51,6 +51,8 @@ publish-apk                       # 根帮助
 publish-apk -v                    # 版本号
 publish-apk huawei                # huawei 子命令帮助
 publish-apk huawei <命令> --help   # 某个子命令的帮助文档
+publish-apk google                # google 子命令帮助
+publish-apk google <命令> --help   # 某个子命令的帮助文档
 ```
 
 ### huawei 子命令
@@ -216,9 +218,118 @@ publish-apk huawei service-account-upload-url --app-id <应用ID> --file-name a1
 - 地址有效期为**约 5 分钟**，所以本命令把"取地址 → 上传"串在一条命令里完成，中间不做别的耗时操作。
 - 上传成功时华为只返回 HTTP 200（响应体为空），因此 `stdout` 输出的是取址响应里的 `objectId`——后续接口（如上传软件包）需要它。
 
+### google 子命令
+
+Google Play 走 **Android Publisher API v3**，鉴权用**服务账号 JSON 密钥**：本地签发 RS256 JWT → 换取 OAuth 2.0 `access_token`：
+
+| 命令 | 说明 | stdout |
+| --- | --- | --- |
+| `google access-token` | 用服务账号 JSON 换取 `access_token` | `access_token` |
+| `google upload-aab` | 创建 edit → 上传 `.aab` →（可选）更新轨道 → 提交 edit | bundle 的 `versionCode` |
+
+### 上传一个 .aab 分四步
+
+| 步骤 | 接口 | 谁来调 |
+| --- | --- | --- |
+| 1. 创建 edit | `POST /androidpublisher/v3/applications/{packageName}/edits` | `google upload-aab` |
+| 2. 上传 bundle | `POST /upload/androidpublisher/v3/applications/{packageName}/edits/{editId}/bundles?uploadType=resumable` 取会话地址，再 `PUT` 会话地址上传文件内容 | `google upload-aab` |
+| 3. 更新轨道 | `PUT /androidpublisher/v3/applications/{packageName}/edits/{editId}/tracks/{track}` | 给了 `--track` 时 |
+| 4. 提交 edit | `POST /androidpublisher/v3/applications/{packageName}/edits/{editId}:commit` | `google upload-aab` |
+
+- **只有第 4 步提交成功，修改才真正生效**。中途失败时命令会尽力 `DELETE` 这个 edit：已上传的 bundle 一并丢弃，不留下半成品。
+- 不给 `--track` 时只上传 bundle 并提交，**不进入任何轨道**；给了 `--track` 才创建 / 更新对应轨道的发布。
+- `.aab` 后缀、包名、发布状态、分阶段比例都会在**本地**先校验，不会等传完才失败。
+- 上传用 Google 的 **resumable upload**（先取会话地址、再 PUT 文件内容），这是官方对大文件的做法；`.aab` 仍会一次性读入内存，超大包需给 Node 更多内存。
+- 若提交返回 `changesNotSentForReview`（例如应用启用了**托管发布（managed publishing）**）：加 `--changes-not-sent-for-review`（或 `GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW=1`），变更会留在 Play 控制台等待人工送审。
+
+`--track` 的取值是轨道标识：`production`（正式版）、`beta`、`alpha`、`internal`（内部测试），或其他自定义轨道名（外形轨道如 `wear:production` 也可直接传）。给了 `--track` 时的发布状态：
+
+| `--release-status` | 含义 |
+| --- | --- |
+| `completed` | 全部用户可更新（默认） |
+| `draft` | 仅保存为草稿，需要人工在 Play 控制台发起发布 |
+| `inProgress` | 分阶段发布，**必须**同时给出 `--user-fraction`（0 与 1 之间，如 `0.1` 表示 10% 用户） |
+| `halted` | 暂停分阶段发布，可配合 `--user-fraction` 调整比例 |
+
+```bash
+# 1. 用服务账号换 access_token
+publish-apk google access-token --service-account ./google-play-service-account.json
+
+# 2. 只上传 .aab（不发布到轨道），stdout 是 versionCode
+publish-apk google upload-aab \
+  --package-name com.example.app --file ./app-release.aab \
+  --service-account ./google-play-service-account.json
+
+# 3. 上传并发布到内部测试轨道（默认 completed）
+publish-apk google upload-aab \
+  --package-name com.example.app --file ./app-release.aab \
+  --service-account ./google-play-service-account.json --track internal
+
+# 4. 正式轨道 + 发布说明（默认语言 zh-CN，可用 --release-notes-language 改）
+publish-apk google upload-aab \
+  --package-name com.example.app --file ./app-release.aab \
+  --service-account ./google-play-service-account.json --track production \
+  --release-notes "修复若干问题"
+
+# 5. 10% 分阶段发布
+publish-apk google upload-aab \
+  --package-name com.example.app --file ./app-release.aab \
+  --service-account ./google-play-service-account.json --track production \
+  --release-status inProgress --user-fraction 0.1
+
+# 6. 已有 access_token（例如由别处换取），不必再给服务账号
+publish-apk google upload-aab --package-name com.example.app --file ./app-release.aab \
+  --token "$GOOGLE_TOKEN" --track beta
+```
+
+### Google Play 服务账号准备
+
+1. 在 Google Cloud 控制台创建项目，并启用 **Google Play Developer API**；
+2. 创建服务账号并生成 **JSON 密钥**（含 `client_email`、`private_key`、`token_uri`）；
+3. 在 Google Play 控制台的「用户和权限」里邀请该 `client_email`，按需授予 **Release to testing tracks**、
+   **Release to production, exclude devices, and use app signing by Google Play** 等权限；
+4. 应用的**第一个版本仍需在 Play 控制台手动上传**，之后才能用 API 上传后续版本。
+
+凭据有两种传法，任选其一：
+
+**方式 A：完整 JSON**（推荐，字段不易拼错）
+
+- `--service-account <文件>` / `GOOGLE_SERVICE_ACCOUNT`
+- `--service-account-data <JSON>` / `GOOGLE_SERVICE_ACCOUNT_DATA`
+
+**方式 B：把 JSON 里的属性拆开传**（适合 CI 把各字段存成独立 Secret）
+
+| JSON 字段 | 命令行选项 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `client_email` | `--client-email` | `GOOGLE_CLIENT_EMAIL` | 必填 |
+| `private_key` | `--private-key-data` | `GOOGLE_PRIVATE_KEY_DATA` | 必填，PEM 数据；也可存成 PEM 文件后用 `--private-key` / `GOOGLE_PRIVATE_KEY` |
+| `token_uri` | `--token-uri` | `GOOGLE_TOKEN_URI` | 可选，默认 `https://oauth2.googleapis.com/token` |
+| `project_id`、`private_key_id` | — | — | 不参与 RS256 JWT 鉴权，无需传递 |
+
+```bash
+# 方式 B：命令行分项参数
+publish-apk google upload-aab \
+  --package-name com.example.app --file ./app-release.aab \
+  --client-email publisher@project.iam.gserviceaccount.com \
+  --private-key ./service-account.pem --track internal
+
+# 方式 B：环境变量（私钥建议只走环境变量，避免出现在 ps / CI 日志里）
+export GOOGLE_CLIENT_EMAIL=publisher@project.iam.gserviceaccount.com
+export GOOGLE_PRIVATE_KEY_DATA="$(cat service-account.pem)"
+publish-apk google upload-aab --package-name com.example.app --file ./app-release.aab --track internal
+```
+
+凭据优先级（高 → 低）：命令行 JSON → 命令行分项 → 环境变量 JSON → 环境变量分项。
+命令行 JSON 与分项不能同时给；环境变量层两者都在时优先完整 JSON 并在 stderr 提示。
+
+本工具只支持**服务账号 JSON 密钥**（`type` 为 `service_account`）或它的分项字段；Workload Identity Federation / ADC 生成的凭据文件暂不支持。
+
 ## 环境变量
 
-带值的选项都有同名环境变量兜底，**命令行选项优先**；开关型选项 `--verbose` 对应 `HUAWEI_VERBOSE`，取值规则见下表。
+带值的选项都有同名环境变量兜底，**命令行选项优先**；开关型选项 `--verbose` 对应各厂商的 `*_VERBOSE`，取值规则见下表。
+
+### 华为（`HUAWEI_*`）
+
 
 | 环境变量 | 等价选项 | 说明 |
 | --- | --- | --- |
@@ -255,6 +366,43 @@ publish-apk huawei service-account-upload-url
 如果本机拿不到文件（例如由别的步骤产出），就用 `HUAWEI_FILE_NAME` + `HUAWEI_CONTENT_LENGTH` 显式给出这两个值
 （这只适用于 `*-upload-url`；`*-upload-file` 必须能读到本地文件）。
 
+### Google Play（`GOOGLE_*`）
+
+| 环境变量 | 等价选项 | 说明 |
+| --- | --- | --- |
+| `GOOGLE_PACKAGE_NAME` | `--package-name` | Google Play 应用包名，如 `com.example.app` |
+| `GOOGLE_FILE` | `--file` | `.aab` 文件路径 |
+| `GOOGLE_SERVICE_ACCOUNT` | `--service-account` | 服务账号 JSON 密钥文件路径（完整 JSON） |
+| `GOOGLE_SERVICE_ACCOUNT_DATA` | `--service-account-data` | 服务账号 JSON 数据（与前者二选一；两者都在时**数据优先**并在 stderr 提示） |
+| `GOOGLE_CLIENT_EMAIL` | `--client-email` | 服务账号 JSON 的 `client_email`（分项字段） |
+| `GOOGLE_PRIVATE_KEY` | `--private-key` | 私钥 PEM 文件路径（分项字段，与 `GOOGLE_PRIVATE_KEY_DATA` 二选一） |
+| `GOOGLE_PRIVATE_KEY_DATA` | `--private-key-data` | 私钥 PEM 数据（分项字段；建议只走环境变量） |
+| `GOOGLE_TOKEN` | `--token` | 已换取的 `access_token` |
+| `GOOGLE_TRACK` | `--track` | 发布到哪个轨道；不给则只上传 bundle |
+| `GOOGLE_RELEASE_STATUS` | `--release-status` | 轨道发布状态，默认 `completed` |
+| `GOOGLE_RELEASE_NAME` | `--release-name` | 轨道发布名称 |
+| `GOOGLE_RELEASE_NOTES` | `--release-notes` | 轨道发布说明 |
+| `GOOGLE_RELEASE_NOTES_LANGUAGE` | `--release-notes-language` | 发布说明语言（BCP-47），默认 `zh-CN` |
+| `GOOGLE_USER_FRACTION` | `--user-fraction` | 分阶段发布比例（0 与 1 之间） |
+| `GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW` | `--changes-not-sent-for-review` | 提交时 `changesNotSentForReview=true`（托管发布时变更留待人工送审）；`1`/`true`/`yes`/`on` 开启 |
+| `GOOGLE_VERBOSE` | `--verbose` | 开启运行日志：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
+| `GOOGLE_TOKEN_URI` | `--token-uri` | 令牌接口地址；默认取服务账号 JSON 的 `token_uri`（`https://oauth2.googleapis.com/token`） |
+| `GOOGLE_API_BASE` | —（仅环境变量） | 接口域名，默认 `https://androidpublisher.googleapis.com`；本地联调或代理时覆盖 |
+
+示例（密钥全程只走环境变量，不出现在命令行参数里）：
+
+```bash
+export GOOGLE_SERVICE_ACCOUNT=./google-play-service-account.json
+export GOOGLE_PACKAGE_NAME=com.example.app
+export GOOGLE_FILE=./app-release.aab
+export GOOGLE_TRACK=internal
+
+publish-apk google upload-aab
+```
+
+`upload-aab` 的 Token 来源优先级（高 → 低）：命令行 JSON 参数 → 命令行分项参数（两者都是本地换取）→
+`--token`（或 `GOOGLE_TOKEN`）→ 环境变量 JSON → 环境变量分项（本地换取）。
+
 ## 常见华为错误码
 
 登记软件包时遇到的错误码，多数不是请求写法问题，而是**应用/版本当前状态**不允许修改：
@@ -265,10 +413,21 @@ publish-apk huawei service-account-upload-url
 | `204144647` | `[cds]update service failed … can't be edited service` | 应用版本处于**审核中**（`app-info` 的 `releaseState` 为 `4`）或分阶段发布中，此时不允许更新文件信息。等版本回到可编辑状态（如 `0` 已上架、`7` 草稿）再试；注意华为**仍可能**把这次软件包加进「软件包管理」列表 |
 | `204144743` | `app state can not be modified!` | 同上：应用正在审核（例如首次审核），不允许修改 |
 
+## 常见 Google Play 错误
+
+服务账号换取令牌成功不代表有发布权限；下面几类错误最常见：
+
+| HTTP / 错误 | 含义与处理 |
+| --- | --- |
+| `401 invalid_grant` | 服务账号 JSON 与项目不匹配、私钥损坏，或本机时间偏差过大（JWT 的 `iat` / `exp`）。检查系统时间并重新下载密钥 |
+| `403 PERMISSION_DENIED` | 服务账号未在 Play 控制台「用户和权限」中被邀请，或缺少对应轨道 / 正式版的发布权限 |
+| `404 applicationNotFound` | `--package-name` 写错，或应用尚未在 Play 控制台创建 |
+| `400` 上传或更新轨道失败 | 常见原因：`.aab` 损坏或签名不对、versionCode 已存在且未提升、上一版本还在处理中（稍后重试）、`inProgress` 缺少 `userFraction` |
+
 ## 输出与退出代码约定
 
-- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId`），可直接被 `$(…)` 与 `jq` 取用。
-- `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径只显示掩码**，私钥数据永不写入日志（`--file` 的本地路径按原样打印，它不是凭证，出错时正是靠它定位）。
+- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode`），可直接被 `$(…)` 与 `jq` 取用。
+- `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` / `GOOGLE_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径、服务账号路径只显示掩码**，私钥与服务账号 JSON 数据永不写入日志（`--file` 的本地路径按原样打印，它不是凭证，出错时正是靠它定位）。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
 
@@ -286,10 +445,15 @@ make huawei-service-account-upload-file HUAWEI_APP_ID=xxx HUAWEI_FILE=./a1.apk
 make huawei-client-credentials HUAWEI_CLIENT_ID=xxx HUAWEI_CLIENT_SECRET=xxx
 make huawei-client-credentials-upload-file HUAWEI_APP_ID=xxx HUAWEI_FILE=./a1.apk
 make huawei-service-account-upload-file-package-info-update HUAWEI_APP_ID=xxx HUAWEI_FILE=./a1.apk
+make google-help                                 # google 子命令帮助
+make google-access-token GOOGLE_SERVICE_ACCOUNT=./google-play-service-account.json
+make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-release.aab GOOGLE_TRACK=internal
+make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-release.aab \
+  GOOGLE_CLIENT_EMAIL=xxx@project.iam.gserviceaccount.com GOOGLE_PRIVATE_KEY=./service-account.pem
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE` 与 `HUAWEI_API_BASE` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（`--verbose` 是开关，转成选项反而无法表达"关闭"）。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -309,6 +473,21 @@ make pack-check                                  # 查看 npm 发布物内容（
   <https://developer.huawei.com/consumer/cn/doc/AppGallery-connect-References/agcapi-app-file-info-0000001111685202>
 
 以上文档归华为所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
+
+### Google Play
+
+- 接入准备（创建 Google Cloud 项目、启用 API、服务账号与 Play 控制台授权）：
+  <https://developers.google.com/android-publisher/getting_started?hl=zh-cn>
+- Edits（edit 的生命周期与提交）：
+  <https://developers.google.com/android-publisher/edits?hl=zh-cn>
+- 上传 `.aab`（`edits.bundles.upload`）：
+  <https://developers.google.com/android-publisher/api-ref/rest/v3/edits.bundles/upload?hl=zh-cn>
+- 轨道与发布（`Track` / `Release` 字段、发布状态）：
+  <https://developers.google.com/android-publisher/tracks?hl=zh-cn>
+- 服务账号 OAuth 2.0（JWT Bearer 换取 `access_token`）：
+  <https://developers.google.com/identity/protocols/oauth2/service-account>
+
+以上文档归 Google 所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
 
 ## License
 

@@ -4,11 +4,11 @@ SHELL := /usr/bin/env bash
 # Set default target when running 'make' without arguments
 .DEFAULT_GOAL := help
 
-# 本文件定义的变量一律以 HUAWEI_ 开头（SHELL、MAKEFILE_LIST 等是 make 自带的特殊变量），
+# 本文件定义的变量一律以 HUAWEI_ / GOOGLE_ 开头（SHELL、MAKEFILE_LIST 等是 make 自带的特殊变量），
 # 因为系统环境里可能已经存在 PRIVATE_KEY、APP_ID、ARGS 这类通用名字：make 的 `?=` 会直接
 # 继承同名环境变量，于是 `make huawei-service-account` 会莫名其妙地带上 --private-key。
 #
-# 可选变量（名字与命令读取的环境变量一致）：
+# 华为可选变量（名字与命令读取的环境变量一致）：
 #   HUAWEI_KID / HUAWEI_ISS
 #                             等价于 service-account 的 --kid / --iss
 #   HUAWEI_PRIVATE_KEY        私钥 PEM 文件路径，等价于 --private-key
@@ -31,8 +31,32 @@ SHELL := /usr/bin/env bash
 #   HUAWEI_ARGS               追加到命令末尾的额外参数，例如 HUAWEI_ARGS="--verbose"
 #   （HUAWEI_API_BASE 只有环境变量形式，命令直接读取，不作变量转发）
 #
+# Google Play 可选变量（名字与命令读取的环境变量一致）：
+#   GOOGLE_PACKAGE_NAME       等价于 upload-aab 的 --package-name
+#   GOOGLE_FILE               .aab 文件路径，等价于 --file
+#   GOOGLE_SERVICE_ACCOUNT    服务账号 JSON 文件路径，等价于 --service-account
+#   GOOGLE_SERVICE_ACCOUNT_DATA
+#                             服务账号 JSON 数据，等价于 --service-account-data；
+#                             JSON 含双引号，**不作选项转发**，由 make 导出为环境变量后命令自行读取
+#   GOOGLE_CLIENT_EMAIL       服务账号 JSON 的 client_email，等价于 --client-email
+#   GOOGLE_PRIVATE_KEY        私钥 PEM 文件路径，等价于 --private-key
+#   GOOGLE_PRIVATE_KEY_DATA   私钥 PEM 数据，等价于 --private-key-data；
+#                             多行 PEM **不作选项转发**，由 make 导出为环境变量后命令自行读取
+#   GOOGLE_TOKEN              access_token，等价于 --token
+#   GOOGLE_TRACK              轨道名，等价于 --track（不给则只上传 bundle）
+#   GOOGLE_RELEASE_STATUS / GOOGLE_RELEASE_NAME / GOOGLE_RELEASE_NOTES
+#   GOOGLE_RELEASE_NOTES_LANGUAGE / GOOGLE_USER_FRACTION
+#                             等价于 upload-aab 的同名选项
+#   GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW
+#                             等价于 --changes-not-sent-for-review（托管发布时留待人工送审）
+#   GOOGLE_VERBOSE            等价于 --verbose：1/true/yes/on 开启日志，0/false/no/off 关闭
+#   GOOGLE_ARGS               追加到命令末尾的额外参数，例如 GOOGLE_ARGS="--verbose"
+#   （GOOGLE_TOKEN_URI / GOOGLE_API_BASE 只有环境变量形式，命令直接读取，不作变量转发；
+#     GOOGLE_TOKEN_URI 虽然也有 --token-uri 选项，但从 make 传值容易出现引号问题，统一走环境变量）
+#
 # 转发规则：只有「make 命令行上显式传入」的变量才转成选项
 #   make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
+#   make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_TRACK=internal
 # 环境变量（包括 source .env 进来的）一律不转发，交给命令自己读取，原因有三：
 #   1. 密钥不进命令行参数（ps 看不到），也不会被 make 回显到终端/CI 日志里；
 #   2. 环境里的值不会被当成「显式选项」回传，避免旧变量残留时绕过程序内部的优先级判断；
@@ -56,10 +80,30 @@ HUAWEI_RELEASE_TYPE ?=
 HUAWEI_RELEASE_PHASE ?=
 HUAWEI_VERBOSE ?=
 HUAWEI_ARGS ?=
+GOOGLE_PACKAGE_NAME ?=
+GOOGLE_FILE ?=
+GOOGLE_SERVICE_ACCOUNT ?=
+GOOGLE_SERVICE_ACCOUNT_DATA ?=
+GOOGLE_CLIENT_EMAIL ?=
+GOOGLE_PRIVATE_KEY ?=
+GOOGLE_PRIVATE_KEY_DATA ?=
+GOOGLE_TOKEN ?=
+GOOGLE_TRACK ?=
+GOOGLE_RELEASE_STATUS ?=
+GOOGLE_RELEASE_NAME ?=
+GOOGLE_RELEASE_NOTES ?=
+GOOGLE_RELEASE_NOTES_LANGUAGE ?=
+GOOGLE_USER_FRACTION ?=
+GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW ?=
+GOOGLE_VERBOSE ?=
+GOOGLE_ARGS ?=
 
 # $(call huaweiOption,变量名,选项名)：仅当该变量来自 make 命令行时，展开成 `选项 "值"`；
 # 来自环境变量的值不展开（$(origin) 会返回 environment），由命令自己读取。
 huaweiOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
+# Google 变量使用同一套转发规则
+googleOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
 # 组合 huawei service-account 的参数：命令行给哪个变量就转哪个选项，都不给则完全回退环境变量
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
@@ -89,6 +133,20 @@ HUAWEI_SERVICE_ACCOUNT_UPLOAD_FILE_PACKAGE_INFO_ARGS = $(HUAWEI_PACKAGE_INFO_ARG
 # 组合 huawei client-credentials-upload-file-package-info-update 的参数
 HUAWEI_CLIENT_CREDENTIALS_UPLOAD_FILE_PACKAGE_INFO_ARGS = $(HUAWEI_PACKAGE_INFO_ARGS) $(call huaweiOption,HUAWEI_FILE,--file) $(HUAWEI_CLIENT_CREDENTIALS_ARGS)
 
+# 组合 google 服务账号凭据的参数：完整 JSON 或分项字段二选一。
+# GOOGLE_SERVICE_ACCOUNT_DATA / GOOGLE_PRIVATE_KEY_DATA 含双引号或多行 PEM，
+# 只经环境变量传入（make 命令行变量会导出给子进程），见文件头的说明。
+GOOGLE_CREDENTIALS_ARGS = $(call googleOption,GOOGLE_SERVICE_ACCOUNT,--service-account) $(call googleOption,GOOGLE_CLIENT_EMAIL,--client-email) $(call googleOption,GOOGLE_PRIVATE_KEY,--private-key)
+
+# 组合 google access-token 的参数
+GOOGLE_ACCESS_TOKEN_ARGS = $(GOOGLE_CREDENTIALS_ARGS)
+
+# 组合 google upload-aab 的参数
+# （GOOGLE_PACKAGE_NAME / GOOGLE_FILE / 服务账号凭据 / GOOGLE_TOKEN / GOOGLE_TRACK /
+#   GOOGLE_RELEASE_STATUS / GOOGLE_RELEASE_NAME / GOOGLE_RELEASE_NOTES /
+#   GOOGLE_RELEASE_NOTES_LANGUAGE / GOOGLE_USER_FRACTION）
+GOOGLE_UPLOAD_AAB_ARGS = $(call googleOption,GOOGLE_PACKAGE_NAME,--package-name) $(call googleOption,GOOGLE_FILE,--file) $(GOOGLE_CREDENTIALS_ARGS) $(call googleOption,GOOGLE_TOKEN,--token) $(call googleOption,GOOGLE_TRACK,--track) $(call googleOption,GOOGLE_RELEASE_STATUS,--release-status) $(call googleOption,GOOGLE_RELEASE_NAME,--release-name) $(call googleOption,GOOGLE_RELEASE_NOTES,--release-notes) $(call googleOption,GOOGLE_RELEASE_NOTES_LANGUAGE,--release-notes-language) $(call googleOption,GOOGLE_USER_FRACTION,--user-fraction)
+
 # Display help information with colored output
 # Parses comments with '##' and formats them nicely
 help: ## Show help information
@@ -105,6 +163,9 @@ help: ## Show help information
 	huawei-client-credentials-upload-url-help huawei-client-credentials-upload-url \
 	huawei-client-credentials-upload-file-help huawei-client-credentials-upload-file \
 	huawei-client-credentials-upload-file-package-info-update-help huawei-client-credentials-upload-file-package-info-update \
+	google-help \
+	google-access-token-help google-access-token \
+	google-upload-aab-help google-upload-aab \
 	pack-check
 
 h: ## 帮助文档
@@ -160,6 +221,23 @@ huawei-client-credentials-upload-file-package-info-update-help: ## 华为 上传
 
 huawei-client-credentials-upload-file-package-info-update: ## 华为 上传文件并登记软件包（API 客户端，HUAWEI_APP_ID / HUAWEI_FILE_NAME 必填；未给 HUAWEI_OBJECT_ID 时自己上传，要 HUAWEI_FILE；输出 objectId）
 	@node src/publish-apk.js huawei client-credentials-upload-file-package-info-update $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_FILE_PACKAGE_INFO_ARGS) $(HUAWEI_ARGS)
+
+# ------------------------------------------------------------- Google Play
+
+google-help: ## Google Play 帮助文档
+	node src/publish-apk.js google
+
+google-access-token-help: ## Google Play 获取 access_token 帮助文档
+	node src/publish-apk.js google access-token --help
+
+google-access-token: ## Google Play 获取 access_token（完整 JSON 用 GOOGLE_SERVICE_ACCOUNT[_DATA]，分项用 GOOGLE_CLIENT_EMAIL + GOOGLE_PRIVATE_KEY[_DATA]，GOOGLE_ARGS 追加参数）
+	@node src/publish-apk.js google access-token $(GOOGLE_ACCESS_TOKEN_ARGS) $(GOOGLE_ARGS)
+
+google-upload-aab-help: ## Google Play 上传 .aab 帮助文档
+	node src/publish-apk.js google upload-aab --help
+
+google-upload-aab: ## Google Play 上传 .aab（GOOGLE_PACKAGE_NAME / GOOGLE_FILE 必填，凭证用完整 JSON、分项字段或 GOOGLE_TOKEN，GOOGLE_TRACK 发布到轨道，输出 versionCode）
+	@node src/publish-apk.js google upload-aab $(GOOGLE_UPLOAD_AAB_ARGS) $(GOOGLE_ARGS)
 
 # ------------------------------------------------------------------ npm 发布物
 

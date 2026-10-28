@@ -1,10 +1,15 @@
 /**
  * JWT 工具：厂商无关。
  *
- * 这里只做 JWT 本身的事情——时间戳、日志掩码、PEM 还原、PS256 签名，
- * 不包含任何厂商的固定值（华为的 typ/alg/aud/exp 偏移见 src/huawei.js）。
+ * 这里只做 JWT 本身的事情——时间戳、日志掩码、PEM 还原、RS256/PS256 签名，
+ * 不包含任何厂商的固定值（华为的 typ/alg/aud/exp 偏移见 src/huawei.js，
+ * Google 的 iss/scope/aud 见 src/google.js）。
  *
  * 签名只使用 Node 内置的 node:crypto，不引入任何第三方依赖。
+ *
+ * 两种 RSA 签名算法对应两家厂商的服务账号鉴权：
+ *   RS256 —— RSASSA-PKCS1-v1_5 + SHA-256，Google 服务账号
+ *   PS256 —— RSASSA-PSS + SHA-256，华为 Service Account
  */
 import {
   constants,
@@ -63,15 +68,21 @@ function base64UrlEncode(text) {
 }
 
 /**
- * PS256 的签名参数：签名与自检验签必须完全一致。
+ * 各算法的签名参数：签名与自检验签必须完全一致。
  *
- * 两个值都必须显式指定，写错会得到一个本机不报错、但服务端验签失败的 JWT：
- *   padding:    RSA_PKCS1_PSS_PADDING —— 不能用 Node 默认的 PKCS#1 v1.5
- *   saltLength: RSA_PSS_SALTLEN_DIGEST —— RFC 7518 规定 PS256 的盐长等于摘要长度（32 字节）
+ *   PS256：两个值都必须显式指定，写错会得到一个本机不报错、但服务端验签失败的 JWT：
+ *          padding:    RSA_PKCS1_PSS_PADDING —— 不能用 Node 默认的 PKCS#1 v1.5
+ *          saltLength: RSA_PSS_SALTLEN_DIGEST —— RFC 7518 规定 PS256 的盐长等于摘要长度（32 字节）
+ *   RS256：PKCS#1 v1.5，无盐长参数；显式写出 padding 以免受 Node 默认值变化影响
  */
-const PS256_SIGN_OPTIONS = {
-  padding: constants.RSA_PKCS1_PSS_PADDING,
-  saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
+const SIGN_OPTIONS = {
+  PS256: {
+    padding: constants.RSA_PKCS1_PSS_PADDING,
+    saltLength: constants.RSA_PSS_SALTLEN_DIGEST,
+  },
+  RS256: {
+    padding: constants.RSA_PKCS1_PADDING,
+  },
 }
 
 /**
@@ -83,8 +94,6 @@ const PS256_SIGN_OPTIONS = {
  *
  * PEM 的合法字符集（base64、+、/、=、-、换行）里没有反斜杠，
  * 因此在这些转义序列存在、且没有真实换行时把它们还原成换行是安全的。
- *
- * 放在厂商无关的 jwt.js 里，供华为私钥与 Google 服务账号 JSON 共用。
  */
 export function normalizePemText(text) {
   if (text.includes('\n')) {
@@ -94,44 +103,54 @@ export function normalizePemText(text) {
 }
 
 /**
- * PS256 必须使用 RSA 私钥。
+ * RSA 签名必须使用 RSA 私钥。
  *
  * 关键：Node 的 crypto.sign 传入 EC 密钥时不会报错，而是静默改用 ECDSA，
- * 于是产出一个「头部写着 PS256、实际是 ECDSA」的 JWT，只有服务端才会验签失败。
+ * 于是产出一个「头部写着 RS256/PS256、实际是 ECDSA」的 JWT，只有服务端才会验签失败。
  * 所以这里主动校验密钥类型与长度。
  */
-function assertRsaPrivateKey(key) {
+function assertRsaPrivateKey(key, algorithm) {
   const { asymmetricKeyType, asymmetricKeyDetails } = key
   if (asymmetricKeyType !== 'rsa' && asymmetricKeyType !== 'rsa-pss') {
-    throw new Error(`PS256 需要 RSA 私钥，当前密钥类型为 ${asymmetricKeyType}`)
+    throw new Error(`${algorithm} 需要 RSA 私钥，当前密钥类型为 ${asymmetricKeyType}`)
   }
   const modulusLength = asymmetricKeyDetails?.modulusLength ?? 0
   if (modulusLength < 2048) {
-    throw new Error(`PS256 需要 RSA 密钥长度 ≥ 2048 位，当前为 ${modulusLength} 位`)
+    throw new Error(`${algorithm} 需要 RSA 密钥长度 ≥ 2048 位，当前为 ${modulusLength} 位`)
   }
 }
 
 /**
- * 用私钥签发 PS256 JWT（RSASSA-PSS + SHA-256），只用 node:crypto。
+ * 用私钥签发 JWT，只用 node:crypto。
  *
- * @param {{ header: object, claims: object, privateKey: string }} jwt
- *   privateKey 为 PEM 文本，PKCS#8（BEGIN PRIVATE KEY）与 PKCS#1（BEGIN RSA PRIVATE KEY）都支持
+ * @param {{ header: object, claims: object, privateKey: string, algorithm?: 'PS256' | 'RS256' }} jwt
+ *   privateKey 为 PEM 文本，PKCS#8（BEGIN PRIVATE KEY）与 PKCS#1（BEGIN RSA PRIVATE KEY）都支持；
+ *   algorithm 默认 PS256（华为），Google 服务账号用 RS256
  * @returns {string} header.payload.signature
  */
-export function signJwt({ header, claims, privateKey }) {
+export function signJwt({ header, claims, privateKey, algorithm = 'PS256' }) {
+  const signOptions = SIGN_OPTIONS[algorithm]
+  if (signOptions === undefined) {
+    throw new Error(`不支持的 JWT 签名算法 ${algorithm}，仅支持 ${Object.keys(SIGN_OPTIONS).join(' / ')}`)
+  }
+  // 头部 alg 与实际签名算法必须一致，否则会得到一个「声明与实现不符」的 JWT
+  if (header?.alg !== algorithm) {
+    throw new Error(`JWT 头 alg 为 ${header?.alg ?? '(未设置)'}，与签名算法 ${algorithm} 不一致`)
+  }
+
   const key = createPrivateKey(privateKey)
-  assertRsaPrivateKey(key)
+  assertRsaPrivateKey(key, algorithm)
 
   const signingInput = `${base64UrlEncode(JSON.stringify(header))}.${base64UrlEncode(JSON.stringify(claims))}`
   const data = Buffer.from(signingInput, 'utf8')
-  const signature = cryptoSign('sha256', data, { key, ...PS256_SIGN_OPTIONS })
+  const signature = cryptoSign('sha256', data, { key, ...signOptions })
 
   // 自检：用同一密钥导出的公钥验一次。Node 对参数错误不会报错，只会在服务端才暴露，
   // 因此这里把「签完自己先验一遍」作为最后一道防线。
   const verified = cryptoVerify(
     'sha256',
     data,
-    { key: createPublicKey(key), ...PS256_SIGN_OPTIONS },
+    { key: createPublicKey(key), ...signOptions },
     signature,
   )
   if (!verified) {

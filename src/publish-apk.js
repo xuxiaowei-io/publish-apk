@@ -3,7 +3,7 @@
  * publish-apk 命令行入口（根命令）。
  *
  * 本文件保持**厂商无关**：只负责根帮助、版本号与厂商子命令分发。
- * 各厂商的命令与帮助文档放在各自模块里（当前只有 src/huawei.js），
+ * 各厂商的命令与帮助文档放在各自模块里（当前有 src/huawei.js 与 src/google.js），
  * 新增厂商时实现 runXxx(argv, env) 并在下面 VENDORS 注册一行即可。
  *
  * 根命令已支持的行为：
@@ -11,7 +11,7 @@
  *   2. node src/publish-apk.js help         输出根帮助文档
  *   3. node src/publish-apk.js --help       输出根帮助文档
  *   4. node src/publish-apk.js -v           输出版本号
- *   5. node src/publish-apk.js <厂商> ...   分发给对应厂商模块（如 huawei，见 src/huawei.js）
+ *   5. node src/publish-apk.js <厂商> ...   分发给对应厂商模块（如 huawei / google）
  *   6. node src/publish-apk.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
  *
  * 厂商命令的详细行为见各自模块的头部注释。
@@ -35,16 +35,17 @@ import {
   writeStdout,
 } from './cli.js'
 import { renderHelp } from './help.js'
+import { googleCommand } from './google.js'
 import { huaweiCommand } from './huawei.js'
 
 /**
  * 厂商命令表：厂商模块导出 { name, summary, run } 描述，这里注册即可。
  * 新增厂商（如小米）只需两步：
  *   import { xiaomiCommand } from './xiaomi.js'
- *   const VENDORS = [huaweiCommand, xiaomiCommand]
+ *   const VENDORS = [huaweiCommand, googleCommand, xiaomiCommand]
  * 根帮助的「命令」一栏会自动跟着更新。
  */
-const VENDORS = [huaweiCommand]
+const VENDORS = [huaweiCommand, googleCommand]
 
 const { version, author } = createRequire(import.meta.url)('../package.json')
 
