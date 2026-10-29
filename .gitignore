@@ -40,3 +40,7 @@ build/
 *.cer
 *.p12
 *.p7b
+
+# 签名配置 --write 的改前备份
+.signing/
+/material/

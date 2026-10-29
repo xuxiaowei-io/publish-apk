@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 # Set default target when running 'make' without arguments
 .DEFAULT_GOAL := help
 
-# 本文件定义的变量一律以 HUAWEI_ / GOOGLE_ / CERT_ / PROFILE_ 开头（SHELL、MAKEFILE_LIST 等是 make 自带的特殊变量），
+# 本文件定义的变量一律以 HUAWEI_ / GOOGLE_ / CERT_ / PROFILE_ / HARMONY_ 开头（SHELL、MAKEFILE_LIST 等是 make 自带的特殊变量），
 # 因为系统环境里可能已经存在 PRIVATE_KEY、APP_ID、ARGS 这类通用名字：make 的 `?=` 会直接
 # 继承同名环境变量，于是 `make huawei-service-account` 会莫名其妙地带上 --private-key。
 #
@@ -66,6 +66,18 @@ SHELL := /usr/bin/env bash
 #   PROFILE_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   PROFILE_ARGS      追加到 profile 命令末尾的额外参数，例如 PROFILE_ARGS="--verbose"
 #
+# 鸿蒙签名配置可选变量（与命令读取的 HARMONY_* 环境变量同名）：
+#   HARMONY_STORE_FILE / HARMONY_CERTPATH / HARMONY_PROFILE
+#                     p12 / cer / p7b 路径，等价于 signing-config 的 --store-file / --certpath / --profile
+#   HARMONY_KEY_ALIAS 密钥别名，等价于 --key-alias（不传时用 keytool 自动识别）
+#   HARMONY_SIGN_ALG  签名算法，等价于 --sign-alg，默认 SHA256withECDSA
+#   HARMONY_CONFIG    build-profile.json5 路径，等价于 --config
+#   HARMONY_SIGNING_NAME / HARMONY_PRODUCT
+#                     等价于 --name / --product
+#   HARMONY_STORE_PASSWORD / HARMONY_KEY_PASSWORD
+#                     明文口令；只走环境变量或交互输入，**不作选项转发**（密码不进命令行）
+#   HARMONY_ARGS      追加到 signing-config 命令末尾的额外参数，例如 HARMONY_ARGS="--write"
+#
 # 转发规则：只有「make 命令行上显式传入」的变量才转成选项
 #   make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
 #   make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_TRACK=internal
@@ -116,6 +128,15 @@ CERT_ARGS ?=
 PROFILE_FILE ?=
 PROFILE_VERBOSE ?=
 PROFILE_ARGS ?=
+HARMONY_STORE_FILE ?=
+HARMONY_CERTPATH ?=
+HARMONY_PROFILE ?=
+HARMONY_KEY_ALIAS ?=
+HARMONY_SIGN_ALG ?=
+HARMONY_CONFIG ?=
+HARMONY_SIGNING_NAME ?=
+HARMONY_PRODUCT ?=
+HARMONY_ARGS ?=
 
 # $(call huaweiOption,变量名,选项名)：仅当该变量来自 make 命令行时，展开成 `选项 "值"`；
 # 来自环境变量的值不展开（$(origin) 会返回 environment），由命令自己读取。
@@ -129,6 +150,12 @@ certOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
 # P7B Profile 变量使用同一套转发规则
 profileOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
+# 鸿蒙签名配置变量使用同一套转发规则（口令不在其中：只走环境变量或交互输入）
+harmonyOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
+# 组合 signing-config 的参数
+HARMONY_SIGNING_ARGS = $(call harmonyOption,HARMONY_STORE_FILE,--store-file) $(call harmonyOption,HARMONY_CERTPATH,--certpath) $(call harmonyOption,HARMONY_PROFILE,--profile) $(call harmonyOption,HARMONY_KEY_ALIAS,--key-alias) $(call harmonyOption,HARMONY_SIGN_ALG,--sign-alg) $(call harmonyOption,HARMONY_CONFIG,--config) $(call harmonyOption,HARMONY_SIGNING_NAME,--name) $(call harmonyOption,HARMONY_PRODUCT,--product)
 
 # 组合 cert 的参数：CERT_FILE 只在 make 命令行给出时转成 --file；
 # --verbose 是开关，由命令读取 CERT_VERBOSE（转成 `--verbose "0"` 无法表达「关闭」）
@@ -189,6 +216,7 @@ help: ## Show help information
 	cert-help cert \
 	profile-help profile \
 	huawei-help \
+	huawei-signing-config-help huawei-signing-config \
 	huawei-service-account-help huawei-service-account \
 	huawei-service-account-upload-url-help huawei-service-account-upload-url \
 	huawei-service-account-upload-file-help huawei-service-account-upload-file \
@@ -273,6 +301,12 @@ huawei-client-credentials-upload-file-package-info-update-help: ## 华为 上传
 
 huawei-client-credentials-upload-file-package-info-update: ## 华为 上传文件并登记软件包（API 客户端，HUAWEI_APP_ID / HUAWEI_FILE_NAME 必填；未给 HUAWEI_OBJECT_ID 时自己上传，要 HUAWEI_FILE；输出 objectId）
 	@node src/publish-apk.js huawei client-credentials-upload-file-package-info-update $(HUAWEI_CLIENT_CREDENTIALS_UPLOAD_FILE_PACKAGE_INFO_ARGS) $(HUAWEI_ARGS)
+
+huawei-signing-config-help: ## 华为 生成鸿蒙 build-profile.json5 签名配置帮助文档
+	node src/publish-apk.js huawei signing-config --help
+
+huawei-signing-config: ## 华为 生成鸿蒙 build-profile.json5 签名配置（HARMONY_STORE_FILE / HARMONY_CERTPATH / HARMONY_PROFILE 必填；口令用 HARMONY_STORE_PASSWORD；HARMONY_ARGS 追加 --write 等）
+	@node src/publish-apk.js huawei signing-config $(HARMONY_SIGNING_ARGS) $(HARMONY_ARGS)
 
 # ------------------------------------------------------------- Google Play
 

@@ -3,6 +3,7 @@
 发布 APP 的命令行工具：为应用市场**获取鉴权令牌**、**上传安装包**并**登记软件包 / 发布版本**，供上传/发布流水线使用。
 当前支持华为应用市场（AppGallery Connect / AGC Connect API）与 Google Play（Android Publisher API v3）。
 另提供一个与厂商无关的 `cert` 命令（证书 / PKCS#12 密钥库）与 `profile` 命令（P7B Provisioning Profile）。
+华为侧另有 `huawei signing-config`，用 `.cer` / `.p7b` / `.p12` 与明文口令生成 `build-profile.json5` 的签名配置。
 
 - 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`）
 - `stdout` 只写结果、`stderr` 只写日志与错误，便于 `TOKEN=$(publish-apk …)` 与管道取用
@@ -30,6 +31,7 @@
 
 - Node.js **>= 18**（使用内置 `fetch` 与 `AbortSignal.timeout`）
 - 查看 PKCS#12（如 `storeFile.p12`）需要系统 `openssl` 命令（OpenSSL 1.1.1+ / LibreSSL）；其它功能只依赖 Node 内置模块
+- `huawei signing-config` 的 keytool 自检是可选的：没有 JDK / keytool 时用 `--key-alias` 指定别名即可
 
 ## 安装
 
@@ -128,6 +130,7 @@ PROFILE_VERBOSE=1 publish-apk profile --file ./profile.p7b
 
 - **Service Account 方式**：用私钥在本地签发 PS256 JWT，直接作为 `Authorization: Bearer` 使用 → `service-account` / `service-account-upload-url` / `service-account-upload-file` / `service-account-upload-file-package-info-update`
 - **API 客户端方式**：用 `client_id` + `client_secret` 调接口换取 `access_token`，业务接口除 Bearer 外还要带 `client_id` 头 → `client-credentials` / `client-credentials-upload-url` / `client-credentials-upload-file` / `client-credentials-upload-file-package-info-update`
+- **鸿蒙签名配置**：用 `.cer` / `.p7b` / `.p12` 与明文口令生成 `build-profile.json5` 的 `material`（含 material 目录与两串密文口令）→ `signing-config`
 
 | 命令 | 说明 | stdout |
 | --- | --- | --- |
@@ -139,6 +142,30 @@ PROFILE_VERBOSE=1 publish-apk profile --file ./profile.p7b
 | `huawei client-credentials-upload-url` | 确定 `access_token`（本地换取优先，其次 `--token`）后获取文件上传地址，并同时携带 `client_id` 头 | 接口原始响应 JSON |
 | `huawei client-credentials-upload-file` | 同上确定 `access_token` 后取上传地址并上传本地文件 | 文件对象 ID（`objectId`） |
 | `huawei client-credentials-upload-file-package-info-update` | 同上确定 `access_token` 后**上传文件并登记软件包**（未给 `--object-id` 时自己上传） | 文件对象 ID（`objectId`） |
+| `huawei signing-config` | 用 `.cer` / `.p7b` / `.p12` 与明文口令生成鸿蒙签名配置（material + 密文口令） | `signingConfig` JSON |
+
+### 生成鸿蒙签名配置（`huawei signing-config`）
+
+鸿蒙 `build-profile.json5` 的 `app.signingConfigs[].material` 里，`storePassword` / `keyPassword`
+不是明文，而是用 `.p12` 同级目录下 `material/` 里的 workKey 加密过的十六进制串。
+本命令把「选文件 + 输明文口令 + 生成 material + 加密口令」合成一步：
+
+```bash
+HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-config \
+  --store-file ./storeFile.p12 \
+  --certpath ./certpath.cer \
+  --profile ./profile.p7b \
+  --key-alias dev \
+  --config ./build-profile.json5 \
+  --name default \
+  --write
+```
+
+- `.p12` / `.cer` / `.p7b` 都必填；`material/` 固定生成在 `.p12` 同级目录（hvigor 的 DecipherUtil 从这里取 workKey），已有可用 material 会复用。
+- `--key-alias` 不传时用 `keytool` 从 `.p12` 读取；keytool 还会用 `-certreq` 自检两个明文口令能否打开私钥。
+- 不给 `--write` 时只把 `signingConfig` JSON 写到 `stdout`，方便手工粘贴；`--write` 只更新同名 `signingConfig` 的 `material`，改前备份到 `build-profile.json5` 所在目录的 `.signing/backup/`。
+- 明文口令优先用 `HARMONY_STORE_PASSWORD` / `HARMONY_KEY_PASSWORD`，也可以交互输入；`--store-password` / `--key-password` 会进入 shell 历史，不推荐。
+- material 是解开两串密文的唯一钥匙，不能删除、不能入库；`--new-material` 可重造一套（旧的自动备份）。
 
 ### 上传一个安装包分三步
 
@@ -448,6 +475,21 @@ publish-apk huawei service-account-upload-url
 如果本机拿不到文件（例如由别的步骤产出），就用 `HUAWEI_FILE_NAME` + `HUAWEI_CONTENT_LENGTH` 显式给出这两个值
 （这只适用于 `*-upload-url`；`*-upload-file` 必须能读到本地文件）。
 
+### 鸿蒙签名配置（`HARMONY_*`）
+
+| 环境变量 | 等价选项 | 说明 |
+| --- | --- | --- |
+| `HARMONY_STORE_FILE` | `--store-file` | 鸿蒙签名密钥库 `.p12` |
+| `HARMONY_CERTPATH` | `--certpath` | 鸿蒙签名证书 `.cer` |
+| `HARMONY_PROFILE` | `--profile` | 鸿蒙 Provisioning Profile `.p7b` |
+| `HARMONY_KEY_ALIAS` | `--key-alias` | p12 里的密钥别名；不传时用 keytool 自动读取 |
+| `HARMONY_SIGN_ALG` | `--sign-alg` | 签名算法，默认 `SHA256withECDSA` |
+| `HARMONY_STORE_PASSWORD` | `--store-password` | `.p12` 明文口令；推荐用环境变量/交互输入；make 只把它作为环境变量传给子进程，不转成 `--store-password` |
+| `HARMONY_KEY_PASSWORD` | `--key-password` | 密钥明文口令；默认与 `HARMONY_STORE_PASSWORD` 相同 |
+| `HARMONY_CONFIG` | `--config` | `build-profile.json5` 路径，默认 `./build-profile.json5` |
+| `HARMONY_SIGNING_NAME` | `--name` | 要更新/输出的 signingConfig 名字，默认 `default` |
+| `HARMONY_PRODUCT` | `--product` | 按产品名找它挂的 signingConfig 作为名字 |
+
 ### Google Play（`GOOGLE_*`）
 
 | 环境变量 | 等价选项 | 说明 |
@@ -508,10 +550,11 @@ publish-apk google upload-aab
 
 ## 输出与退出代码约定
 
-- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书、PKCS#12 与 P7B profile 信息），可直接被 `$(…)` 与 `jq` 取用。
+- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书、PKCS#12 与 P7B profile 信息 / `signingConfig` JSON），可直接被 `$(…)` 与 `jq` 取用。
 - `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` / `GOOGLE_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径、服务账号路径只显示掩码**，私钥与服务账号 JSON 数据永不写入日志（`--file` 的本地路径按原样打印，它不是凭证，出错时正是靠它定位）。
 - `cert` 的 `--verbose` / `CERT_VERBOSE` 是「输出全部证书 / 密钥库字段」而不是运行日志，信息统一写 `stdout`；PKCS#12 的私钥内容不会被输出。
 - `profile` 的 `--verbose` / `PROFILE_VERBOSE` 输出全部 profile JSON 字段与证书字段，信息同样写 `stdout`。
+- `huawei signing-config` 的 `stdout` 是 `signingConfig` JSON（含密文口令），material 路径、keytool 自检结果与 `--write` 备份路径写 `stderr`；明文口令不会打印。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
 
@@ -527,6 +570,10 @@ CERT_PASSWORD=<密码> make cert CERT_FILE=./storeFile.p12  # 查看 PKCS#12（�
 make cert-help                                   # cert 命令帮助
 make profile PROFILE_FILE=./profile.p7b          # 查看 P7B Provisioning Profile
 make profile-help                                # profile 命令帮助
+HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-config \
+  HARMONY_STORE_FILE=./storeFile.p12 HARMONY_CERTPATH=./certpath.cer \
+  HARMONY_PROFILE=./profile.p7b HARMONY_SIGNING_NAME=default HARMONY_ARGS="--write"
+make huawei-signing-config-help                  # 鸿蒙签名配置帮助
 make huawei-help                                 # huawei 子命令帮助
 make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
 make huawei-service-account-upload-url HUAWEI_APP_ID=xxx HUAWEI_FILE=./a1.apk
@@ -542,7 +589,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD` 还刻意不转成 `--password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 

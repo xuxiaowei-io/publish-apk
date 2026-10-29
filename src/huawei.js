@@ -2,7 +2,7 @@
  * 华为应用市场命令（`publish-apk huawei ...`）。
  *
  * 厂商隔离：所有华为相关的东西都在本模块——
- *   - 命令与帮助文档（huawei / huawei service-account）
+ *   - 命令与帮助文档（huawei / huawei service-account / huawei signing-config）
  *   - JWT 固定值：typ、alg、aud、exp 相对 iat 的偏移
  *   - 华为特有的选项与环境变量（--kid/--iss、HUAWEI_KID/HUAWEI_ISS 等）
  *
@@ -47,6 +47,10 @@
  *      确定 access_token（同 9）→ 上传 + 登记，成功时同样输出 objectId，退出代码 0
  *      （8~11 的文件参数：--file 必填；--file-name 默认取该文件名；
  *      --content-length 只用于校验、会与实际文件大小比对，见 collectUploadFileParams）
+ *  14. node src/publish-apk.js huawei signing-config <必填参数>
+ *      用 .cer / .p7b / .p12 与明文口令生成鸿蒙 build-profile.json5 的 signingConfig：
+ *      在 .p12 同级目录生成/复用 material，加密 storePassword / keyPassword，
+ *      输出可直接粘贴的 signingConfig（--write 时写回现有 build-profile.json5），退出代码 0
  *
  * 环境变量：每个带值的选项都有同名环境变量兜底（选项优先），见各命令帮助文档的「环境变量」小节；
  * 开关型选项 --verbose 也有环境变量 HUAWEI_VERBOSE（1/true/yes/on 开启、0/false/no/off 关闭）。
@@ -76,6 +80,7 @@ import {
   normalizePemText,
   signJwt,
 } from './jwt.js'
+import { runHuaweiSigningConfig } from './huawei-signing.js'
 
 // ---------------------------------------------------------------- JWT 固定值
 
@@ -2428,6 +2433,7 @@ function renderHuaweiHelp() {
           ['client-credentials-upload-url', '获取文件上传地址（API 客户端）'],
           ['client-credentials-upload-file', '上传文件（API 客户端）'],
           ['client-credentials-upload-file-package-info-update', '上传文件并登记软件包（API 客户端）'],
+          ['signing-config', '生成鸿蒙 build-profile.json5 签名配置'],
           ['help', '显示帮助信息'],
         ],
       },
@@ -2445,6 +2451,8 @@ function renderHuaweiHelp() {
       `    --kid <密钥ID> --iss <签发者> --private-key ./private.pem`,
       `  ${PROGRAM} huawei service-account-upload-file-package-info-update --app-id <应用ID> \\`,
       `    --file ./a1.apk --kid <密钥ID> --iss <签发者> --private-key ./private.pem`,
+      `  ${PROGRAM} huawei signing-config --store-file ./storeFile.p12 \\`,
+      `    --certpath ./certpath.cer --profile ./profile.p7b --key-alias dev --write`,
     ],
   })
 }
@@ -3267,6 +3275,9 @@ async function runHuawei(argv, env) {
   }
   if (command === 'client-credentials-upload-file-package-info-update') {
     return runHuaweiClientCredentialsUploadFilePackageInfo(rest, env)
+  }
+  if (command === 'signing-config') {
+    return runHuaweiSigningConfig(rest, env)
   }
   throw new UsageError(`未知命令 "huawei ${command}"`, renderHuaweiHelp())
 }
