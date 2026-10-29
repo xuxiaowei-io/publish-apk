@@ -121,6 +121,7 @@ SHELL := /usr/bin/env bash
 #   ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_PASSWORD
 #                             明文口令；只走环境变量或交互输入，**不作选项转发**（密码不进命令行）
 #   ANDROID_KEYSTORE_ARGS     追加到 keystore 命令末尾的额外参数
+#   KEYSTORE_GEN_ARGS         追加到 keystore-gen 命令末尾的额外参数（如 --file ./release.p12 --key-alias release）
 #
 #   与 --base64 / ANDROID_KEYSTORE_BASE64 同用时，ANDROID_KEYSTORE_FILE 是**输出**路径：
 #   校验通过后把解码出来的密钥库原文写进去；只给 BASE64 时用临时文件校验，不落盘。
@@ -183,6 +184,7 @@ ANDROID_KEY_ALIAS ?=
 ANDROID_KEYSTORE_PASSWORD ?=
 ANDROID_KEY_PASSWORD ?=
 KEYSTORE_ARGS ?=
+KEYSTORE_GEN_ARGS ?=
 HARMONY_STORE_FILE ?=
 HARMONY_STORE_FILE_OUT ?=
 HARMONY_CERTPATH ?=
@@ -369,6 +371,12 @@ keystore-help: ## 校验 Android 签名密钥库帮助文档
 
 keystore: ## 校验 Android 签名密钥库（ANDROID_KEYSTORE_FILE / ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS；BASE64 + FILE 时先落盘）
 	@node src/publish-apk.js keystore $(KEYSTORE_FILE_ARGS) $(KEYSTORE_ARGS)
+
+keystore-gen-help: ## 快速生成 Android 签名密钥库帮助文档
+	node src/publish-apk.js keystore-gen --help
+
+keystore-gen: ## 快速生成 Android 签名密钥库（口令用 ANDROID_KEYSTORE_PASSWORD；KEYSTORE_GEN_ARGS 传 --file / --key-alias 等）
+	@node src/publish-apk.js keystore-gen $(KEYSTORE_GEN_ARGS)
 
 # ------------------------------------------------------------------- 华为
 

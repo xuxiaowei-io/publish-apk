@@ -40,6 +40,11 @@ build/
 *.cer
 *.p12
 *.p7b
+*.jks
+*.keystore
+*.p12.bak-*
+*.jks.bak-*
+*.keystore.bak-*
 
 # 签名配置 --write 的改前备份
 .signing/

@@ -61,6 +61,7 @@ publish-apk -v                    # 版本号
 publish-apk cert --file ./certpath.cer                    # 查看证书
 publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 密钥库
 publish-apk keystore --file ./release.p12 --store-password <口令> --key-alias release  # 校验 Android 签名密钥库
+publish-apk keystore-gen --file ./release.p12 --key-alias release  # 快速生成 Android keystore
 ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore  # 校验 CI 变量
 publish-apk profile --file ./profile.p7b                  # 查看 P7B Provisioning Profile
 publish-apk hap --file ./app-signed.hap                    # 查看 HAP 安装包信息
@@ -95,7 +96,8 @@ publish-apk google <命令> --help   # 某个子命令的帮助文档
 
 Android 的签名密钥库（`.jks` / `.keystore` / `.p12`）用 `keystore` 校验：它不仅看证书，还会用
 `keytool` 确认 keystore 口令、别名与私钥口令是否配套，并支持把 `ANDROID_KEYSTORE_BASE64` 解码后
-写到 `ANDROID_KEYSTORE_FILE`。详见下面的 `keystore` 小节。
+写到 `ANDROID_KEYSTORE_FILE`。需要从零生成一份时用 `keystore-gen`，默认生成 PKCS#12 并自动校验。
+详见下面的 `keystore` / `keystore-gen` 小节。
 
 查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文，`hap` / `app` / `apk` / `aab` 只读包内信息与签名块头；这些命令只读取本地文件，不会访问应用商店。
 
@@ -186,6 +188,38 @@ ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore
 - `--store-password` / `--key-password` 会进入 shell 历史与 `ps`，建议用
   `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_PASSWORD`；非交互环境没有给口令时直接报错。
 - 校验失败（口令错、别名不存在、私钥口令错、`keytool` 不可用）以退出代码 `1` 结束，不会写输出文件。
+
+### keystore-gen（快速生成 Android 签名密钥库）
+
+与厂商无关的本地工具：用 JDK 的 `keytool -genkeypair` 快速生成一份 Android 签名 keystore，
+生成后立即用 `keystore` 同样的逻辑校验口令、别名与私钥，并输出校验报告。
+
+```bash
+# 最简：默认 ./release.p12、别名 release、PKCS12、RSA 2048、10000 天
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-gen
+
+# 指定文件 / 别名 / 类型
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-gen \
+  --file ./release.jks --key-alias myapp --store-type JKS
+
+# 自定义 DN、算法、位数、有效期；已有文件先备份再覆盖
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-gen \
+  --file ./release.p12 --key-alias release --force \
+  --dname "CN=MyApp, OU=Android, O=MyOrg, L=Unknown, ST=Unknown, C=CN" \
+  --key-algorithm EC --key-size 256 --validity 3650
+```
+
+- 文件名后缀不限（`.p12` / `.jks` / `.keystore` / 无后缀均可）；内容类型只看 `--store-type`，不根据后缀推断。
+- 默认值：`--file ./release.p12`、`--key-alias release`、`--store-type PKCS12`、
+  `--key-algorithm RSA`、`--key-size 2048`、`--validity 10000`，
+  `--dname "CN=Android Release, OU=Android, O=Android, L=Unknown, ST=Unknown, C=US"`。
+- 口令至少 6 位；`--store-password` / `ANDROID_KEYSTORE_PASSWORD`，非交互环境没给口令会直接报错，
+  交互环境会提示输入两次。PKCS12 / JKS 的 keyPassword 都与 storePassword 相同。
+- 目标文件已存在时默认拒绝；加 `--force` 会先备份为 `<文件>.bak-<时间戳>` 再覆盖。
+- 生成后自动校验，`stdout` 输出与 `keystore` 相同的报告；落盘权限固定 `0600`。
+- 口令不会打印；但 keytool 只接受 `-storepass` / `-keypass` 参数形式，生成期间会出现在本地
+  keytool 进程的 argv 里（与 `keystore` / `huawei signing-config` 一致）。
+- 依赖 JDK 的 `keytool`；可用 `KEYTOOL=/path/to/keytool` 指定。
 
 ### hap（查看 HAP 安装包信息）
 
@@ -683,10 +717,10 @@ publish-apk google upload-aab --package-name com.example.app --file ./app-releas
 | 环境变量 | 等价选项 | 说明 |
 | --- | --- | --- |
 | `ANDROID_KEYSTORE_BASE64` | `--base64` | 密钥库的 BASE64 内容；与文件路径同用时先解码落盘 |
-| `ANDROID_KEYSTORE_FILE` | `--file` | 密钥库路径；与 BASE64 同用时是输出路径，单独用时是输入文件 |
+| `ANDROID_KEYSTORE_FILE` | `--file` | 密钥库路径；`keystore` 与 BASE64 同用时是输出路径，单独用时是输入文件；`keystore-gen` 用作输出路径 |
 | `ANDROID_KEYSTORE` | `--file` | `ANDROID_KEYSTORE_FILE` 的别名，只当文件路径用 |
-| `ANDROID_KEYSTORE_PASSWORD` | `--store-password` | keystore 明文口令；建议用环境变量，避免进入 `ps` / shell 历史 |
-| `ANDROID_KEY_ALIAS` | `--key-alias` | 私钥别名；不传时用 `keytool -list` 自动识别 |
+| `ANDROID_KEYSTORE_PASSWORD` | `--store-password` | keystore 明文口令；`keystore` / `keystore-gen` 共用；建议用环境变量，避免进入 `ps` / shell 历史 |
+| `ANDROID_KEY_ALIAS` | `--key-alias` | 私钥别名；`keystore` 不传时自动识别，`keystore-gen` 默认 `release` |
 | `ANDROID_KEY_PASSWORD` | `--key-password` | 私钥明文口令；不传时用 keystore 口令 |
 | `KEYTOOL` | —（仅环境变量） | `keytool` 可执行文件，默认 PATH 上的 `keytool` |
 

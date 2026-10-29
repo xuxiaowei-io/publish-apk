@@ -47,6 +47,7 @@ import { renderHelp } from './help.js'
 
 /** 命令名（根帮助与示例里使用） */
 const COMMAND_NAME = 'keystore'
+const GEN_COMMAND_NAME = 'keystore-gen'
 
 /** 密钥库路径；与 --base64 同用时是解码后的输出路径 */
 const OPTION_FILE = '--file'
@@ -58,6 +59,12 @@ const OPTION_STORE_PASSWORD = '--store-password'
 const OPTION_KEY_ALIAS = '--key-alias'
 /** 私钥明文口令；默认与 keystore 口令相同 */
 const OPTION_KEY_PASSWORD = '--key-password'
+const OPTION_STORE_TYPE = '--store-type'
+const OPTION_KEY_ALGORITHM = '--key-algorithm'
+const OPTION_KEY_SIZE = '--key-size'
+const OPTION_VALIDITY = '--validity'
+const OPTION_DNAME = '--dname'
+const OPTION_FORCE = '--force'
 
 const KEYSTORE_OPTIONS = new Set([
   OPTION_FILE,
@@ -67,6 +74,19 @@ const KEYSTORE_OPTIONS = new Set([
   OPTION_KEY_PASSWORD,
 ])
 const KEYSTORE_FLAGS = new Set()
+
+const GEN_OPTIONS = new Set([
+  OPTION_FILE,
+  OPTION_KEY_ALIAS,
+  OPTION_STORE_PASSWORD,
+  OPTION_STORE_TYPE,
+  OPTION_KEY_ALGORITHM,
+  OPTION_KEY_SIZE,
+  OPTION_VALIDITY,
+  OPTION_DNAME,
+  OPTION_FORCE,
+])
+const GEN_FLAGS = new Set([OPTION_FORCE])
 
 /** 密钥库路径，等价于 --file（也可用 ANDROID_KEYSTORE 补） */
 const ENV_FILE = 'ANDROID_KEYSTORE_FILE'
@@ -586,6 +606,242 @@ async function runKeystore(argv, env) {
   const info = verifyKeystore(absolute, buffer, { alias, storePassword, keyPassword })
   stdout(renderReport(absolute, buffer, info))
   return EXIT_OK
+}
+
+/** keystore-gen 帮助文档 */
+function renderKeystoreGenHelp() {
+  return renderHelp({
+    title: `${PROGRAM} ${GEN_COMMAND_NAME} - 快速生成 Android 签名密钥库`,
+    usage: [`${PROGRAM} ${GEN_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '选项',
+        entries: [
+          [
+            `${OPTION_FILE} <路径>`,
+            `输出 keystore 路径，后缀不限，默认 ./release.p12（可用 ${ENV_FILE} / ${ENV_KEYSTORE} 补齐）`,
+          ],
+          [`${OPTION_KEY_ALIAS} <别名>`, `私钥别名，默认 release（可用 ${ENV_KEY_ALIAS} 补齐）`],
+          [
+            `${OPTION_STORE_PASSWORD} <明文>`,
+            `keystore / 私钥口令；至少 6 位。建议用 ${ENV_STORE_PASSWORD} 或交互输入（会进入 keytool 进程参数）`,
+          ],
+          [`${OPTION_STORE_TYPE} <类型>`, 'keystore 类型：PKCS12（默认）或 JKS'],
+          [`${OPTION_KEY_ALGORITHM} <算法>`, '密钥算法，默认 RSA（也可用 EC / DSA）'],
+          [`${OPTION_KEY_SIZE} <位数>`, '密钥位数，默认 2048'],
+          [`${OPTION_VALIDITY} <天数>`, '证书有效期，默认 10000 天'],
+          [
+            `${OPTION_DNAME} <DN>`,
+            '证书主题，默认 CN=Android Release, OU=Android, O=Android, L=Unknown, ST=Unknown, C=US',
+          ],
+          [OPTION_FORCE, '目标文件已存在时先备份为 .bak-<时间戳> 再覆盖；默认拒绝覆盖'],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_FILE, `输出 keystore 路径，等价于 ${OPTION_FILE}`],
+          [ENV_KEYSTORE, `${ENV_FILE} 的别名`],
+          [ENV_KEY_ALIAS, `私钥别名，等价于 ${OPTION_KEY_ALIAS}`],
+          [ENV_STORE_PASSWORD, `keystore / 私钥口令，等价于 ${OPTION_STORE_PASSWORD}（推荐）`],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          ['stdout', '生成后的校验报告（文件 / 类型 / 别名 / 公钥 / 证书 / 校验结论）'],
+          ['stderr', '生成进度、覆盖前的备份路径与警告；口令不会输出'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '生成并校验通过'],
+          ['1', '参数错误、文件已存在（未加 --force）、keytool 失败或校验失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${PROGRAM} ${GEN_COMMAND_NAME} --file ./release.p12 --key-alias release`,
+      `  ANDROID_KEYSTORE_PASSWORD=<口令> ${PROGRAM} ${GEN_COMMAND_NAME} --file ./release.jks --store-type JKS`,
+      `  ${PROGRAM} ${GEN_COMMAND_NAME} --file ./release.p12 --dname "CN=MyApp, OU=Android, O=MyOrg, L=Unknown, ST=Unknown, C=CN"`,
+      '',
+      '说明: 依赖 JDK 的 keytool；口令会通过 -storepass / -keypass 传给本地 keytool 进程',
+      '说明: 生成后会自动用 keytool 校验口令、别名与私钥，并输出校验报告',
+      '说明: PKCS12 / JKS 的 keyPassword 均与 storePassword 相同',
+      '说明: 目标文件默认 release.p12；后缀不限，类型由 --store-type 决定，不根据后缀推断',
+      '说明: 已有文件默认拒绝，--force 会先备份再覆盖',
+    ],
+  })
+}
+
+function validateGenerationPassword(value) {
+  if (/[\r\n\0]/.test(value)) {
+    throw new UsageError('keystore 口令不能包含换行或 NUL 字符', renderKeystoreGenHelp())
+  }
+  if ([...value].length < 6) {
+    throw new UsageError('keystore 口令至少需要 6 位', renderKeystoreGenHelp())
+  }
+  return value
+}
+
+/** keystore-gen 口令：命令行 → 环境变量 → 两次交互输入 */
+async function resolveGenerationPassword(options, env) {
+  const direct = options.get(OPTION_STORE_PASSWORD) ?? readEnv(env, ENV_STORE_PASSWORD)
+  if (direct !== undefined) {
+    return validateGenerationPassword(direct)
+  }
+  if (!process.stdin.isTTY) {
+    throw new UsageError(
+      `缺少 keystore 口令：请用 ${OPTION_STORE_PASSWORD} 或环境变量 ${ENV_STORE_PASSWORD}` +
+        '（非交互环境没有终端可以询问）',
+      renderKeystoreGenHelp(),
+    )
+  }
+  const first = await promptHidden('请输入新 keystore 口令（至少 6 位，不回显）：')
+  const second = await promptHidden('请再次输入 keystore 口令：')
+  if (first !== second) {
+    throw new UsageError('两次输入的 keystore 口令不一致', renderKeystoreGenHelp())
+  }
+  return validateGenerationPassword(first)
+}
+
+function positiveInteger(value, label, min, help) {
+  const normalized = String(value).trim()
+  if (!/^\d+$/.test(normalized) || Number(normalized) < min) {
+    throw new UsageError(`${label}必须是大于等于 ${min} 的整数: ${value}`, help)
+  }
+  return Number(normalized)
+}
+
+function validateDname(value, help) {
+  if (value.trim() === '' || /[\r\n\0]/.test(value)) {
+    throw new UsageError('dname 不能为空，也不能包含换行或 NUL 字符', help)
+  }
+  return value
+}
+
+async function runKeystoreGen(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderKeystoreGenHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(argv, GEN_OPTIONS, renderKeystoreGenHelp, GEN_FLAGS)
+  const fileValue =
+    options.get(OPTION_FILE) ?? readEnv(env, ENV_FILE) ?? readEnv(env, ENV_KEYSTORE) ?? 'release.p12'
+  const alias = options.get(OPTION_KEY_ALIAS) ?? readEnv(env, ENV_KEY_ALIAS) ?? 'release'
+  if (alias.trim() === '' || /[\r\n\0]/.test(alias)) {
+    throw new UsageError('别名不能为空，也不能包含换行或 NUL 字符', renderKeystoreGenHelp())
+  }
+
+  const storeType = String(options.get(OPTION_STORE_TYPE) ?? 'PKCS12').toUpperCase()
+  if (storeType !== 'PKCS12' && storeType !== 'JKS') {
+    throw new UsageError(`不支持的 keystore 类型: ${storeType}（仅支持 PKCS12 / JKS）`, renderKeystoreGenHelp())
+  }
+  const keyAlgorithm = String(options.get(OPTION_KEY_ALGORITHM) ?? 'RSA').toUpperCase()
+  if (!/^[A-Za-z0-9]+$/.test(keyAlgorithm)) {
+    throw new UsageError(`密钥算法不合法: ${keyAlgorithm}`, renderKeystoreGenHelp())
+  }
+  const keySize = positiveInteger(
+    options.get(OPTION_KEY_SIZE) ?? '2048',
+    '密钥位数',
+    256,
+    renderKeystoreGenHelp(),
+  )
+  const validity = positiveInteger(
+    options.get(OPTION_VALIDITY) ?? '10000',
+    '有效期天数',
+    1,
+    renderKeystoreGenHelp(),
+  )
+  const dname = validateDname(
+    options.get(OPTION_DNAME) ??
+      'CN=Android Release, OU=Android, O=Android, L=Unknown, ST=Unknown, C=US',
+    renderKeystoreGenHelp(),
+  )
+  const force = options.get(OPTION_FORCE) === true
+  const password = await resolveGenerationPassword(options, env)
+
+  const absolute = path.resolve(fileValue)
+  if (fs.existsSync(absolute)) {
+    if (!fs.statSync(absolute).isFile()) {
+      throw new UsageError(`keystore 输出路径不是普通文件: ${fileValue}`, renderKeystoreGenHelp())
+    }
+    if (!force) {
+      throw new UsageError(
+        `keystore 已存在: ${absolute}；如需覆盖请加 ${OPTION_FORCE}（会先备份）`,
+        renderKeystoreGenHelp(),
+      )
+    }
+  }
+  if (!keytoolAvailable()) {
+    throw new UsageError(
+      `找不到 keytool（${keytoolBinary()}）：生成 Android keystore 需要 JDK；` +
+        '请安装 JDK 或设置 KEYTOOL 环境变量',
+      renderKeystoreGenHelp(),
+    )
+  }
+
+  fs.mkdirSync(path.dirname(absolute), { recursive: true })
+  const scratch = fs.mkdtempSync(path.join(path.dirname(absolute), '.keystore-gen-'))
+  const tempFile = path.join(scratch, 'keystore')
+  try {
+    const result = runKeytool([
+      '-genkeypair',
+      '-noprompt',
+      '-keystore',
+      tempFile,
+      '-storetype',
+      storeType,
+      '-alias',
+      alias,
+      '-keyalg',
+      keyAlgorithm,
+      '-keysize',
+      String(keySize),
+      '-validity',
+      String(validity),
+      '-dname',
+      dname,
+      '-storepass',
+      password,
+      '-keypass',
+      password,
+    ])
+    if (!result.ok) {
+      throw new UsageError(`keytool 生成 keystore 失败: ${result.detail}`, renderKeystoreGenHelp())
+    }
+
+    const buffer = fs.readFileSync(tempFile)
+    const info = verifyKeystore(tempFile, buffer, {
+      alias,
+      storePassword: password,
+      keyPassword: password,
+    })
+
+    if (fs.existsSync(absolute)) {
+      const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+      const backup = `${absolute}.bak-${stamp}`
+      fs.copyFileSync(absolute, backup)
+      stderr(`警告: 已有 keystore，已备份到 ${backup}`)
+    }
+    fs.renameSync(tempFile, absolute)
+    fs.chmodSync(absolute, 0o600)
+    stderr(`keystore 已生成: ${absolute}`)
+    stdout(renderReport(absolute, buffer, info))
+    return EXIT_OK
+  } finally {
+    fs.rmSync(scratch, { recursive: true, force: true })
+  }
+}
+
+export const keystoreGenCommand = {
+  name: GEN_COMMAND_NAME,
+  summary: '快速生成 Android 签名密钥库（keytool）',
+  run: runKeystoreGen,
 }
 
 export const keystoreCommand = {
