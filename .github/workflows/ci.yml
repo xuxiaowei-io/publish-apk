@@ -320,7 +320,15 @@ jobs:
           grep -Eq "\"storeFile\"[[:space:]]*:[[:space:]]*\"$tmp/storeFile.p12\"" "$tmp/material-env.json5"
           grep -Eq "\"certpath\"[[:space:]]*:[[:space:]]*\"$tmp/cert.pem\"" "$tmp/material-env.json5"
 
-
+          # --require-all：少 storePassword 时直接失败
+          if HARMONY_STORE_FILE="$tmp/storeFile.p12" HARMONY_CERTPATH="$tmp/cert.pem" \
+            HARMONY_PROFILE="$tmp/profile.p7b" HARMONY_KEY_ALIAS=smoke \
+            node src/publish-apk.js huawei signing-material-env \
+            --config "$tmp/material-env.json5" --name default --no-keytool --require-all \
+            > /dev/null 2>&1; then
+            echo 'signing-material-env --require-all 缺口令应当失败' >&2
+            exit 1
+          fi
 
           # keystore：用 keytool 生成 PKCS#12，校验口令 / 别名，并从 BASE64 落盘
           if command -v keytool > /dev/null 2>&1; then

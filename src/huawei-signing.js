@@ -63,6 +63,8 @@ const OPTION_PRODUCT = '--product'
 const OPTION_WRITE = '--write'
 const OPTION_NEW_MATERIAL = '--new-material'
 const OPTION_NO_KEYTOOL = '--no-keytool'
+/** signing-material-env：要求 store / cert / profile / 口令齐全 */
+const OPTION_REQUIRE_ALL = '--require-all'
 const OPTION_VERBOSE = '--verbose'
 
 const SIGNING_OPTIONS = new Set([
@@ -119,8 +121,9 @@ const MATERIAL_ENV_OPTIONS = new Set([
   OPTION_PRODUCT,
   OPTION_NO_KEYTOOL,
   OPTION_NEW_MATERIAL,
+  OPTION_REQUIRE_ALL,
 ])
-const MATERIAL_ENV_FLAGS = new Set([OPTION_NO_KEYTOOL, OPTION_NEW_MATERIAL])
+const MATERIAL_ENV_FLAGS = new Set([OPTION_NO_KEYTOOL, OPTION_NEW_MATERIAL, OPTION_REQUIRE_ALL])
 
 const ENV_STORE_FILE = 'HARMONY_STORE_FILE'
 const ENV_STORE_FILE_BASE64 = 'HARMONY_STORE_FILE_BASE64'
@@ -646,6 +649,7 @@ function renderSigningMaterialEnvHelp() {
           [`${OPTION_PRODUCT} <产品>`, `按 products[].name 找到它挂的 signingConfig（可用 ${ENV_PRODUCT} 补齐）`],
           [OPTION_NO_KEYTOOL, '跳过 keytool 口令自检（仍会校验证书 / Profile / p12 内容）'],
           [OPTION_NEW_MATERIAL, 'material 已存在也重造一套（旧的挪成 material.bak-<时间戳>）'],
+          [OPTION_REQUIRE_ALL, '要求 store / cert / profile / 口令齐全；缺一项直接失败（CI 用）'],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -1765,6 +1769,20 @@ export async function runHuaweiSigningMaterialEnv(argv, env) {
   const signAlgEnv = readEnv(env, ENV_SIGN_ALG)
   const storePasswordEnv = readEnv(env, ENV_STORE_PASSWORD)
   const keyPasswordEnv = readEnv(env, ENV_KEY_PASSWORD)
+
+  if (options.get(OPTION_REQUIRE_ALL) === true) {
+    const missing = []
+    if (storeValues.length === 0) missing.push(`${ENV_STORE_FILE} / ${ENV_STORE_FILE_BASE64}`)
+    if (certValues.length === 0) missing.push(`${ENV_CERTPATH} / ${ENV_CERTPATH_BASE64}`)
+    if (profileValues.length === 0) missing.push(`${ENV_PROFILE} / ${ENV_PROFILE_BASE64}`)
+    if (storePasswordEnv === undefined) missing.push(ENV_STORE_PASSWORD)
+    if (missing.length > 0) {
+      throw new UsageError(
+        `${OPTION_REQUIRE_ALL} 缺少：${missing.join('、')}`,
+        renderSigningMaterialEnvHelp(),
+      )
+    }
+  }
 
   const configStoreFileValue = stringField(entry.text, 'storeFile')
   let storeFile =

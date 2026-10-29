@@ -488,7 +488,7 @@ HARMONY_CERTPATH_BASE64=... \
 HARMONY_PROFILE_BASE64=... \
 HARMONY_STORE_PASSWORD=<p12口令> \
 publish-apk huawei signing-material-env \
-  --config ./build-profile.json5 --name default
+  --config ./build-profile.json5 --name default --require-all
 ```
 
 - 支持的 `HARMONY_*` 变量：
@@ -501,6 +501,8 @@ publish-apk huawei signing-material-env \
   - `HARMONY_*_OUT` 控制 BASE64 / 内容落盘位置
 - 先校验证书 / Profile / p12 内容；有口令时还会用 `keytool` 自检；全部通过后才写回。
 - 没有提供的变量保持原值；只替换提供的字段。
+- `--require-all` 要求 store / cert / profile / 口令齐全，缺一项直接失败；CI 用这个开关保证
+  不会拿半套材料继续打包。
 - 口令通过 `.p12` 同级 `material/` 加密；material 不存在时自动生成，`--new-material` 可重造。
 - 写回前备份到 `.signing/backup/`，写后回读校验。
 - 只给 `HARMONY_KEY_PASSWORD` 时还需要 `HARMONY_STORE_PASSWORD` 才能校验 / 加密。
