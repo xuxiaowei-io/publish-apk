@@ -121,7 +121,7 @@ SHELL := /usr/bin/env bash
 #   ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_PASSWORD
 #                             明文口令；只走环境变量或交互输入，**不作选项转发**（密码不进命令行）
 #   ANDROID_KEYSTORE_ARGS     追加到 keystore 命令末尾的额外参数
-#   KEYSTORE_ENV_ARGS         追加到 keystore-env 命令末尾的额外参数（如 --file ./release.p12 --format shell）
+#   KEYSTORE_ENV_ARGS         追加到 keystore-env 命令末尾的额外参数（如 --file ./release.p12 --format shell --include-file --no-base64）
 #   KEYSTORE_GEN_ARGS         追加到 keystore-gen 命令末尾的额外参数（如 --file ./release.p12 --key-alias release）
 #
 #   与 --base64 / ANDROID_KEYSTORE_BASE64 同用时，ANDROID_KEYSTORE_FILE 是**输出**路径：

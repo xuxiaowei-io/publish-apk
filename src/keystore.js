@@ -71,6 +71,10 @@ const OPTION_VALIDITY = '--validity'
 const OPTION_DNAME = '--dname'
 const OPTION_FORCE = '--force'
 const OPTION_FORMAT = '--format'
+/** keystore-env：额外输出 ANDROID_KEYSTORE_FILE（绝对路径） */
+const OPTION_INCLUDE_FILE = '--include-file'
+/** keystore-env：不输出 ANDROID_KEYSTORE_BASE64 */
+const OPTION_NO_BASE64 = '--no-base64'
 
 const KEYSTORE_OPTIONS = new Set([
   OPTION_FILE,
@@ -100,8 +104,10 @@ const ENV_OPTIONS = new Set([
   OPTION_KEY_ALIAS,
   OPTION_KEY_PASSWORD,
   OPTION_FORMAT,
+  OPTION_INCLUDE_FILE,
+  OPTION_NO_BASE64,
 ])
-const ENV_FLAGS = new Set()
+const ENV_FLAGS = new Set([OPTION_INCLUDE_FILE, OPTION_NO_BASE64])
 
 /** 密钥库路径，等价于 --file（也可用 ANDROID_KEYSTORE 补） */
 const ENV_FILE = 'ANDROID_KEYSTORE_FILE'
@@ -884,6 +890,8 @@ function renderKeystoreEnvHelp() {
             `${OPTION_FORMAT} <env|shell|json>`,
             '输出格式，默认 env（KEY=value，一行一个）；shell 输出 export KEY=...；json 输出对象',
           ],
+          [OPTION_INCLUDE_FILE, '额外输出 ANDROID_KEYSTORE_FILE（绝对路径）'],
+          [OPTION_NO_BASE64, '不输出 ANDROID_KEYSTORE_BASE64（本地 signing.env 用）'],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -902,7 +910,7 @@ function renderKeystoreEnvHelp() {
         entries: [
           [
             'stdout',
-            'ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD',
+            '默认 ANDROID_KEYSTORE_BASE64 / PASSWORD / ALIAS / KEY_PASSWORD；加 --include-file 输出 ANDROID_KEYSTORE_FILE，加 --no-base64 去掉 BASE64',
           ],
           ['stderr', '明文口令警告与错误信息'],
         ],
@@ -920,6 +928,7 @@ function renderKeystoreEnvHelp() {
       `  ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12`,
       `  ANDROID_KEYSTORE_PASSWORD=<口令> ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format shell`,
       `  ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format json > keystore.json`,
+      `  ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format shell --include-file --no-base64 > signing.env`,
       '',
       '警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享',
       '说明: 生成前会用 keytool 校验 keystore 口令、别名与私钥口令',
@@ -929,13 +938,19 @@ function renderKeystoreEnvHelp() {
   })
 }
 
-function renderKeystoreEnvVariables(buffer, alias, storePassword, keyPassword, format, help) {
-  const values = [
-    ['ANDROID_KEYSTORE_BASE64', buffer.toString('base64')],
+function renderKeystoreEnvVariables(absolute, buffer, alias, storePassword, keyPassword, format, options, help) {
+  const values = []
+  if (!options.get(OPTION_NO_BASE64)) {
+    values.push(['ANDROID_KEYSTORE_BASE64', buffer.toString('base64')])
+  }
+  if (options.get(OPTION_INCLUDE_FILE)) {
+    values.push(['ANDROID_KEYSTORE_FILE', absolute])
+  }
+  values.push(
     ['ANDROID_KEYSTORE_PASSWORD', storePassword],
     ['ANDROID_KEY_ALIAS', alias],
     ['ANDROID_KEY_PASSWORD', keyPassword],
-  ]
+  )
   if (format === 'env') {
     return values.map(([name, value]) => `${name}=${value}`).join('\n')
   }
@@ -994,7 +1009,9 @@ async function runKeystoreEnv(argv, env) {
   })
   stderr('警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享')
   stdout(
-    renderKeystoreEnvVariables(buffer, info.alias, storePassword, keyPassword, format, renderKeystoreEnvHelp()),
+    renderKeystoreEnvVariables(
+      absolute, buffer, info.alias, storePassword, keyPassword, format, options, renderKeystoreEnvHelp(),
+    ),
   )
   return EXIT_OK
 }

@@ -192,14 +192,16 @@ ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore
 
 ### keystore-env（导出 Android keystore 的 CI 变量）
 
-把一份 keystore 文件导出成 CI 可直接配置的四个变量：
+把一份 keystore 文件导出成 CI 可直接配置的变量。默认输出四个：
 
 | 变量 | 内容 |
 | --- | --- |
-| `ANDROID_KEYSTORE_BASE64` | keystore 文件的单行 BASE64 |
+| `ANDROID_KEYSTORE_BASE64` | keystore 文件的单行 BASE64；加 `--no-base64` 可去掉 |
 | `ANDROID_KEYSTORE_PASSWORD` | keystore 明文口令 |
 | `ANDROID_KEY_ALIAS` | 私钥别名（不传 `--key-alias` 时由 keytool 自动识别） |
 | `ANDROID_KEY_PASSWORD` | 私钥明文口令（默认与 keystore 口令相同） |
+| `ANDROID_KEYSTORE_FILE` | 可选；加 `--include-file` 输出 keystore 的绝对路径，给本地 `signing.env` 用 |
+
 
 ```bash
 # 默认 env 格式：KEY=value，一行一个，适合逐项复制到 CI 变量
@@ -210,11 +212,17 @@ ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12
 
 # JSON 格式
 ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12 --format json > keystore.json
+
+# 生成可直接 source 的本地签名环境（要文件路径，不要 BASE64）
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12 \
+  --format shell --include-file --no-base64 > .signing/android.env
 ```
 
 - 生成变量前会用 keytool 校验 keystore 口令、别名与私钥口令，校验失败不会输出变量。
 - `--key-alias` / `ANDROID_KEY_ALIAS` 不传时自动识别；`--key-password` / `ANDROID_KEY_PASSWORD`
   不传时使用 keystore 口令。
+- `--include-file` 额外输出 `ANDROID_KEYSTORE_FILE`；`--no-base64` 去掉 `ANDROID_KEYSTORE_BASE64`。
+  两者一起用适合生成 `.signing/android.env`，避免把整份 BASE64 再塞进本地环境。
 - `env` 格式不额外加引号，适合把 `=` 后面的值逐项复制到 CI 变量；`shell` 格式适合本地
   `source`；`json` 格式适合脚本解析。
 - **警告：输出包含明文口令**，不要写入日志、提交仓库或公开分享；`stdout` 只有变量，

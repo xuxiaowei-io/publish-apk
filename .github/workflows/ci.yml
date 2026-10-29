@@ -334,6 +334,15 @@ jobs:
             grep -qE '^证书 MD5: ([0-9A-F]{2}:){15}[0-9A-F]{2}$' "$tmp/keystore.txt"
             grep -q '^校验: 通过' "$tmp/keystore.txt"
 
+            ANDROID_KEYSTORE_PASSWORD=changeit node src/publish-apk.js keystore-env \
+              --file "$tmp/release.p12" --format shell --include-file --no-base64 > "$tmp/android.env"
+            grep -q "^export ANDROID_KEYSTORE_FILE='$tmp/release.p12'$" "$tmp/android.env"
+            grep -q '^export ANDROID_KEYSTORE_PASSWORD=' "$tmp/android.env"
+            if grep -q 'ANDROID_KEYSTORE_BASE64' "$tmp/android.env"; then
+              echo 'keystore-env --no-base64 不应输出 BASE64' >&2
+              exit 1
+            fi
+
             keystore_b64="$(openssl base64 -A -in "$tmp/release.p12")"
             ANDROID_KEYSTORE_BASE64="$keystore_b64" ANDROID_KEYSTORE_PASSWORD=changeit \
               node src/publish-apk.js keystore --file "$tmp/from-base64.p12" > /dev/null
