@@ -149,11 +149,12 @@ HAP_VERBOSE=1 publish-apk hap --file ./app.hap
 ```
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.hap`）；按参数顺序逐个输出，文件之间空一行。
-- 默认输出：文件大小、ZIP 条目数、签名状态、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
+- 默认输出：文件大小、ZIP 条目数、签名状态、Profile 类型（`release` / `debug`）、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
   模块、设备、主 Ability、API 兼容 / 目标版本与原始 API 值（`min` / `target` / `compileSdk`）、安装方式、权限，
   以及签名证书（HAP 签名方案与 Profile 签名各取叶子证书）。
 - `--verbose` / `HAP_VERBOSE=1` 追加：应用标签、厂商、模块包名，
   HAP 签名块版本 / 大小 / 子块类型，全部 ZIP 条目、完整签名证书链，以及完整 `pack.info` / `module.json`。
+- Profile 类型取自 HAP 签名块内嵌 profile JSON 的 `type`（`release` / `debug`）；unsigned 包输出 `未签名`。
 - 构建信息行形如 `构建: debug=false, buildMode=release, bundleType=app`；APP 从第一个内层 HAP 读取。
 - API 原始值来自 `module.json` 的 `app.minAPIVersion` / `targetAPIVersion` / `compileSdkVersion`；
   `pack.info` 的兼容 / 目标版本（10 / 26）仍会单独输出。
@@ -180,11 +181,12 @@ APP_VERBOSE=1 publish-apk app --file ./app.app
 ```
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.app`）；按参数顺序逐个输出，文件之间空一行。
-- 默认输出：文件大小、ZIP 条目数、外层签名状态、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
+- 默认输出：文件大小、ZIP 条目数、外层签名状态、Profile 类型（`release` / `debug`）、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
   模块、设备、主 Ability、API 兼容 / 目标版本与原始 API 值（`min` / `target` / `compileSdk`）、安装方式、权限、
   内层模块列表，以及外层签名证书（HAP 签名方案与 Profile 签名各取叶子证书）。
 - `--verbose` / `APP_VERBOSE=1` 追加：应用标签、厂商、模块包名，
   外层签名块版本 / 大小 / 子块类型，全部 ZIP 条目、完整签名证书链，以及完整 `pack.info` / `pac.json`。
+- Profile 类型取自 APP 外层签名块内嵌 profile JSON 的 `type`（`release` / `debug`）；unsigned 包输出 `未签名`。
 - 构建信息行形如 `构建: debug=false, buildMode=release, bundleType=app`。
 - API 原始值来自内层 HAP `module.json` 的 `app.minAPIVersion` / `targetAPIVersion` / `compileSdkVersion`；
   外层 `pack.info` 的兼容 / 目标版本仍会单独输出。

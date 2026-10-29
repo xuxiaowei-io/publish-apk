@@ -145,6 +145,7 @@ function renderHapHelp() {
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: HAP 是 ZIP，读取 pack.info / module.json；API 原始值取 module.json 的 minAPIVersion / targetAPIVersion / compileSdkVersion',
+      '说明: Profile 类型取签名块内嵌 profile JSON 的 type（release / debug）；unsigned 包输出未签名',
       '说明: 签名只检测 HAP 签名块并从内嵌 PKCS#7 提取证书，未执行验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
       '说明: signed / unsigned 的包内容通常相同，区别在是否带 HAP 签名块',
@@ -201,6 +202,7 @@ function renderAppHelp() {
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: APP 是 ZIP，含 pac.json、pack.info 与一个或多个内层 .hap / .hsp；本命令读取外层信息',
       '说明: API 原始值取第一个内层 HAP 的 module.json（minAPIVersion / targetAPIVersion / compileSdkVersion）',
+      '说明: Profile 类型取外层签名块内嵌 profile JSON 的 type（release / debug）；unsigned 包输出未签名',
       '说明: 签名块在外层，内层 HAP 可能没有单独签名；签名证书从外层 PKCS#7 提取，未执行验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
       '说明: 不输出证书 PEM 原文；APP 里没有私钥',
@@ -461,6 +463,40 @@ function signatureLabel(signature, kind = 'HAP') {
   return `已签名（${blockName}${version}，${signature.count} 个子块；未验签）`
 }
 
+/** 从 HAP 签名块的 Profile 子块里读取 profile 的 type */
+function readHapProfileType(signature, buffer) {
+  if (signature === null) {
+    return { type: undefined, reason: '未签名，没有 Profile' }
+  }
+  if (signature.fallback || signature.invalid) {
+    return { type: undefined, reason: '签名块不完整，无法读取 Profile' }
+  }
+  const block = signature.blocks.find((item) => item.type === 0x20000002)
+  if (block === undefined) {
+    return { type: undefined, reason: '没有 Profile 签名子块' }
+  }
+  if (!block.valueValid) {
+    return { type: undefined, reason: 'Profile 子块越界' }
+  }
+  try {
+    const p7b = parseP7bDer(buffer.subarray(block.valueStart, block.valueEnd))
+    if (p7b.content === undefined) {
+      return { type: undefined, reason: 'Profile 没有内嵌 JSON' }
+    }
+    let text = p7b.content.toString('utf8')
+    if (text.charCodeAt(0) === 0xfeff) {
+      text = text.slice(1)
+    }
+    const json = JSON.parse(text)
+    if (typeof json.type !== 'string') {
+      return { type: undefined, reason: 'Profile JSON 没有 type' }
+    }
+    return { type: json.type }
+  } catch (error) {
+    return { type: undefined, reason: error.message }
+  }
+}
+
 /** 从 HAP 签名块里的 PKCS#7 子块提取证书链 */
 function collectHapSignatureCertificates(signature, buffer) {
   if (signature === null || signature.fallback || signature.invalid) {
@@ -594,6 +630,7 @@ function renderHap(
   const pac = options.pac ?? null
   const innerModules = options.innerModules ?? []
   const innerApp = options.innerApp ?? null
+  const profile = options.profile ?? null
   const summary = pack?.summary ?? {}
   const packApp = summary.app ?? {}
   const packVersion = packApp.version ?? {}
@@ -643,6 +680,13 @@ function renderHap(
     `格式: ${kind} / ZIP（${entries.length} 个条目）`,
     `签名: ${signatureLabel(signature, kind)}`,
   ]
+  if (profile?.type !== undefined) {
+    lines.push(`Profile 类型: ${profile.type}`)
+  } else {
+    lines.push(
+      signature === null ? 'Profile 类型: 未签名' : 'Profile 类型: 未知',
+    )
+  }
 
   if (bundleName !== undefined) {
     lines.push(`包名: ${bundleName}`)
@@ -732,6 +776,9 @@ function renderHap(
     lines.push('', '签名证书: 未解析到证书（仅检测到签名块）')
   }
   if (verbose) {
+    if (profile?.type === undefined && profile?.reason !== undefined) {
+      lines.push(`Profile 类型说明: ${profile.reason}`)
+    }
     if (label !== undefined) {
       lines.push(`应用标签: ${label}`)
     }
@@ -793,7 +840,8 @@ function parseHap(buffer, path, help) {
     )
   }
   const signature = readHapSignature(buffer, eocd.centralOffset)
-  return { entries, pack, moduleJson, signature }
+  const profile = readHapProfileType(signature, buffer)
+  return { entries, pack, moduleJson, signature, profile }
 }
 
 /** 从 APP 内层 HAP 的 module.json 里取 app 信息，用于 API 原始值 */
@@ -831,7 +879,8 @@ function parseApp(buffer, path, help) {
     }
   }
   const signature = readHapSignature(buffer, eocd.centralOffset)
-  return { entries, pack, pac, innerModules, innerApp, signature }
+  const profile = readHapProfileType(signature, buffer)
+  return { entries, pack, pac, innerModules, innerApp, signature, profile }
 }
 
 function readHapFile(path, help) {
@@ -890,6 +939,7 @@ function runHap(argv, env) {
         parsed.signature,
         certificateGroups,
         verbose,
+        { profile: parsed.profile },
       ),
     )
     if (index < paths.length - 1) {
@@ -944,7 +994,13 @@ function runApp(argv, env) {
         parsed.signature,
         certificateGroups,
         verbose,
-        { kind: 'APP', pac: parsed.pac, innerModules: parsed.innerModules, innerApp: parsed.innerApp },
+        {
+          kind: 'APP',
+          pac: parsed.pac,
+          innerModules: parsed.innerModules,
+          innerApp: parsed.innerApp,
+          profile: parsed.profile,
+        },
       ),
     )
     if (index < paths.length - 1) {
