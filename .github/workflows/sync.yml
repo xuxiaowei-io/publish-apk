@@ -4,6 +4,8 @@
 # ref 更简单，也不会因为事件合并、并发推送而漏同步；删除分支/标签同样靠全量同步传播。
 #
 # 四个平台通过 matrix 并行执行，fail-fast: false 让一个平台失败不影响其余平台。
+# 单个平台同步失败时自动重试（默认最多 3 次，10s/20s 退避），
+# 网络抖动或平台临时故障不会直接让整个同步失败。
 #
 # 需要在 Settings -> Secrets and variables -> Actions 中配置：
 #   Secrets（令牌）：
@@ -84,6 +86,8 @@ jobs:
           USERNAME_ENV: ${{ matrix.username_env }}
           TARGET_URL: ${{ matrix.url }}
           SOURCE_TOKEN: ${{ github.token }}
+          MAX_ATTEMPTS: 3
+          RETRY_DELAY_SECONDS: 10
         run: |
           set -euo pipefail
           token="${!TOKEN_ENV:-}"
@@ -96,7 +100,19 @@ jobs:
             echo "::error::未配置 ${USERNAME_ENV}，无法同步到 ${TARGET_NAME}"
             exit 1
           fi
-          TARGET_USERNAME="$username" TARGET_TOKEN="$token" \
-            bash .github/scripts/sync-mirror.sh \
-              "https://github.com/${GITHUB_REPOSITORY}.git" \
-              "$TARGET_URL"
+          # 全量同步是幂等的，失败后直接重跑；每次重试都会重新克隆最新状态。
+          for attempt in $(seq 1 "$MAX_ATTEMPTS"); do
+            if TARGET_USERNAME="$username" TARGET_TOKEN="$token" \
+              bash .github/scripts/sync-mirror.sh \
+                "https://github.com/${GITHUB_REPOSITORY}.git" \
+                "$TARGET_URL"; then
+              exit 0
+            fi
+            if [ "$attempt" -lt "$MAX_ATTEMPTS" ]; then
+              delay=$((RETRY_DELAY_SECONDS * attempt))
+              echo "::warning::同步到 ${TARGET_NAME} 第 ${attempt} 次失败，${delay} 秒后重试"
+              sleep "$delay"
+            fi
+          done
+          echo "::error::同步到 ${TARGET_NAME} 失败，已尝试 ${MAX_ATTEMPTS} 次"
+          exit 1
