@@ -37,14 +37,20 @@ import { renderHelp } from './help.js'
 import { parseP7bDer } from './profile.js'
 
 const COMMAND_NAME = 'apk'
+const AAB_COMMAND_NAME = 'aab'
 const OPTION_FILE = '--file'
 const OPTION_VERBOSE = '--verbose'
 const APK_OPTIONS = new Set([OPTION_FILE, OPTION_VERBOSE])
 const APK_FLAGS = new Set([OPTION_VERBOSE])
 const APK_MULTI_OPTIONS = new Set([OPTION_FILE])
+const AAB_OPTIONS = new Set([OPTION_FILE, OPTION_VERBOSE])
+const AAB_FLAGS = new Set([OPTION_VERBOSE])
+const AAB_MULTI_OPTIONS = new Set([OPTION_FILE])
 
 const ENV_FILE = 'APK_FILE'
 const ENV_VERBOSE = 'APK_VERBOSE'
+const ENV_AAB_FILE = 'AAB_FILE'
+const ENV_AAB_VERBOSE = 'AAB_VERBOSE'
 
 const VERBOSE_ON_VALUES = new Set(['1', 'true', 'yes', 'on'])
 const VERBOSE_OFF_VALUES = new Set(['0', 'false', 'no', 'off'])
@@ -79,11 +85,11 @@ const APK_SIG_BLOCK_NAMES = new Map([
 
 // -------------------------------------------------------------- 开关型参数
 
-function resolveVerbose(options, env, help) {
+function resolveVerbose(options, env, help, envName = ENV_VERBOSE) {
   if (options.get(OPTION_VERBOSE) === true) {
     return true
   }
-  const value = readEnv(env, ENV_VERBOSE)
+  const value = readEnv(env, envName)
   if (value === undefined) {
     return false
   }
@@ -95,7 +101,7 @@ function resolveVerbose(options, env, help) {
     return false
   }
   throw new UsageError(
-    `环境变量 ${ENV_VERBOSE} 的值无效: "${value}"（开启用 1/true/yes/on，关闭用 0/false/no/off）`,
+    `环境变量 ${envName} 的值无效: "${value}"（开启用 1/true/yes/on，关闭用 0/false/no/off）`,
     help(),
   )
 }
@@ -152,6 +158,60 @@ function renderApkHelp() {
       '说明: 签名只检测 JAR v1 与 APK Signature Scheme v2 / v3 / v3.1，未执行证书链与摘要验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
       '说明: 不输出证书 PEM 原文；APK 里没有私钥',
+    ],
+  })
+}
+
+function renderAabHelp() {
+  return renderHelp({
+    title: `${PROGRAM} ${AAB_COMMAND_NAME} - 查看 AAB 安装包信息`,
+    usage: [`${PROGRAM} ${AAB_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '选项',
+        entries: [
+          [`${OPTION_FILE} <路径...>`, `一个或多个 AAB 文件路径（支持 shell glob），必填（可用 ${ENV_AAB_FILE} 补齐）`],
+          [
+            OPTION_VERBOSE,
+            `输出全部字段（ZIP 条目、完整证书链、全部权限 / Activity）；命令行未给出时读取 ${ENV_AAB_VERBOSE}`,
+          ],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_AAB_FILE, `AAB 文件路径，等价于 ${OPTION_FILE}`],
+          [ENV_AAB_VERBOSE, '输出全部字段，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          ['stdout', 'AAB 包信息、模块与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与明细'],
+          ['stderr', '错误信息'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '成功'],
+          ['1', '参数缺失、参数错误或文件读取 / 解析失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${PROGRAM} ${AAB_COMMAND_NAME} --file ./app-release.aab`,
+      `  ${PROGRAM} ${AAB_COMMAND_NAME} --file ./*.aab --verbose`,
+      `  ${ENV_AAB_FILE}=./app.aab ${PROGRAM} ${AAB_COMMAND_NAME}`,
+      `  ${ENV_AAB_VERBOSE}=1 ${PROGRAM} ${AAB_COMMAND_NAME} --file ./app.aab`,
+      '',
+      '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
+      '说明: AAB 是 ZIP，Manifest 在 base/manifest/AndroidManifest.xml；本命令直接解析二进制 XML',
+      '说明: AAB 使用 JAR v1 签名（META-INF/*.RSA 等），本命令提取证书但不执行验签',
+      '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
+      '说明: 不输出证书 PEM 原文；AAB 里没有私钥',
     ],
   })
 }
@@ -286,6 +346,124 @@ function parseBinaryXml(buffer, help) {
   return root
 }
 
+/** 读取 protobuf varint */
+function readProtoVarint(buffer, offset, end) {
+  let value = 0
+  let shift = 0
+  while (offset < end) {
+    const byte = buffer[offset]
+    offset += 1
+    value += (byte & 0x7f) * 2 ** shift
+    if ((byte & 0x80) === 0) {
+      return { value, offset }
+    }
+    shift += 7
+    if (shift > 63) {
+      throw new Error('protobuf varint 过长')
+    }
+  }
+  throw new Error('protobuf varint 越界')
+}
+
+/** 解析 protobuf 消息的字段列表 */
+function parseProtoFields(buffer) {
+  const fields = []
+  let offset = 0
+  while (offset < buffer.length) {
+    const key = readProtoVarint(buffer, offset, buffer.length)
+    offset = key.offset
+    const field = Math.floor(key.value / 8)
+    const wire = key.value & 0x7
+    if (wire === 0) {
+      const item = readProtoVarint(buffer, offset, buffer.length)
+      fields.push({ field, wire, value: item.value })
+      offset = item.offset
+    } else if (wire === 1) {
+      if (offset + 8 > buffer.length) throw new Error('protobuf fixed64 越界')
+      fields.push({ field, wire, value: buffer.subarray(offset, offset + 8) })
+      offset += 8
+    } else if (wire === 2) {
+      const item = readProtoVarint(buffer, offset, buffer.length)
+      offset = item.offset
+      if (offset + item.value > buffer.length) throw new Error('protobuf length 越界')
+      fields.push({ field, wire, value: buffer.subarray(offset, offset + item.value) })
+      offset += item.value
+    } else if (wire === 5) {
+      if (offset + 4 > buffer.length) throw new Error('protobuf fixed32 越界')
+      fields.push({ field, wire, value: buffer.subarray(offset, offset + 4) })
+      offset += 4
+    } else {
+      throw new Error(`不支持的 protobuf wire type ${wire}`)
+    }
+  }
+  return fields
+}
+
+function protoString(fields, field) {
+  const item = fields.find((entry) => entry.field === field && entry.wire === 2)
+  return item === undefined ? undefined : item.value.toString('utf8')
+}
+
+/** 解析 AAB 里的 protobuf XML XmlAttribute */
+function decodeProtoAttribute(buffer) {
+  const fields = parseProtoFields(buffer)
+  const name = protoString(fields, 2)
+  const value = protoString(fields, 3)
+  const resource = fields.find((entry) => entry.field === 5 && entry.wire === 0)?.value
+  if (name === undefined) {
+    return undefined
+  }
+  return [name, value ?? (resource === undefined ? undefined : `@0x${resource.toString(16)}`)]
+}
+
+/** 解析 AAB 里的 protobuf XML XmlElement */
+function decodeProtoElement(buffer) {
+  const fields = parseProtoFields(buffer)
+  const name = protoString(fields, 3) ?? protoString(fields, 2)
+  if (name === undefined) {
+    return undefined
+  }
+  const attrs = {}
+  for (const field of fields) {
+    if (field.field === 4 && field.wire === 2) {
+      const attribute = decodeProtoAttribute(field.value)
+      if (attribute !== undefined) {
+        attrs[attribute[0]] = attribute[1]
+      }
+    }
+  }
+  const children = []
+  for (const field of fields) {
+    if (field.field === 5 && field.wire === 2) {
+      const child = decodeProtoNode(field.value)
+      if (child !== undefined) {
+        children.push(child)
+      }
+    }
+  }
+  return { name, attrs, children }
+}
+
+/** 解析 AAB 里的 protobuf XML XmlNode */
+function decodeProtoNode(buffer) {
+  const fields = parseProtoFields(buffer)
+  const element = fields.find((entry) => entry.field === 1 && entry.wire === 2)
+  return element === undefined ? undefined : decodeProtoElement(element.value)
+}
+
+/** 把 AAB 的 protobuf XML 转成和二进制 XML 相同的元素树 */
+function parseProtoXml(buffer, help) {
+  try {
+    const manifest = decodeProtoNode(buffer)
+    if (manifest === undefined) {
+      throw new Error('没有 manifest 元素')
+    }
+    return { name: '#document', attrs: {}, children: [manifest] }
+  } catch (error) {
+    throw new UsageError(`AndroidManifest.xml 不是合法的 protobuf XML: ${error.message}`, help())
+  }
+}
+
 // ------------------------------------------------------------------ Manifest
 
 function child(element, name) {
@@ -318,8 +496,17 @@ function hasLauncher(intentFilter) {
   )
 }
 
-function extractManifest(buffer, help) {
-  const document = parseBinaryXml(buffer, help)
+function booleanValue(value) {
+  if (value === true || value === 'true') {
+    return true
+  }
+  if (value === false || value === 'false') {
+    return false
+  }
+  return value
+}
+
+function manifestFromDocument(document, help) {
   const manifest = child(document, 'manifest')
   if (manifest === undefined) {
     throw new UsageError('AndroidManifest.xml 缺少 manifest 根元素', help())
@@ -355,8 +542,8 @@ function extractManifest(buffer, help) {
     minSdkVersion: usesSdk?.attrs.minSdkVersion,
     targetSdkVersion: usesSdk?.attrs.targetSdkVersion,
     label: application?.attrs.label,
-    debuggable: application?.attrs.debuggable,
-    allowBackup: application?.attrs.allowBackup,
+    debuggable: booleanValue(application?.attrs.debuggable),
+    allowBackup: booleanValue(application?.attrs.allowBackup),
     permissions,
     activities,
     launcher,
@@ -364,6 +551,10 @@ function extractManifest(buffer, help) {
       .map((item) => item.attrs.name)
       .filter((name) => typeof name === 'string'),
   }
+}
+
+function extractManifest(buffer, help) {
+  return manifestFromDocument(parseBinaryXml(buffer, help), help)
 }
 
 // ------------------------------------------------------------------ 签名
@@ -491,7 +682,7 @@ function readV1Certificates(buffer, entries, help) {
   })
 }
 
-function signatureLabel(v1Groups, schemes) {
+function signatureLabel(v1Groups, schemes, kind = 'APK') {
   const parts = []
   if (v1Groups.length > 0) {
     parts.push('JAR v1')
@@ -500,7 +691,7 @@ function signatureLabel(v1Groups, schemes) {
     parts.push(item.scheme)
   }
   if (parts.length === 0) {
-    return '未签名（未检测到 APK 签名）'
+    return kind === 'AAB' ? '未签名（未检测到 AAB 签名）' : '未签名（未检测到 APK 签名）'
   }
   return `已签名（${parts.join(' + ')}；未验签）`
 }
@@ -685,6 +876,176 @@ function runApk(argv, env) {
     }
   }
   return EXIT_OK
+}
+
+function aabLines(buffer, path, entries, manifest, v1Groups, verbose) {
+  const modules = [
+    ...new Set(
+      entries
+        .map((entry) => /^([^/]+)\/manifest\/AndroidManifest\.xml$/.exec(entry.name)?.[1])
+        .filter((value) => typeof value === 'string'),
+    ),
+  ]
+  const abis = [
+    ...new Set(
+      entries
+        .map((entry) => /(?:^|\/)lib\/([^/]+)\//.exec(entry.name)?.[1])
+        .filter((value) => typeof value === 'string'),
+    ),
+  ]
+  const dexCount = entries.filter((entry) => /(^|\/)dex\/classes\d*\.dex$/i.test(entry.name)).length
+  const lines = [
+    `文件: ${path}`,
+    `大小: ${formatBytes(buffer.length)}（${buffer.length} 字节）`,
+    `格式: AAB / ZIP（${entries.length} 个条目）`,
+    `签名: ${signatureLabel(v1Groups, [], 'AAB')}`,
+  ]
+  if (manifest.packageName !== undefined) {
+    lines.push(`包名: ${manifest.packageName}`)
+  }
+  if (manifest.versionName !== undefined || manifest.versionCode !== undefined) {
+    const version = [
+      manifest.versionName,
+      manifest.versionCode === undefined ? '' : `(${manifest.versionCode})`,
+    ]
+      .filter(Boolean)
+      .join(' ')
+    lines.push(`版本: ${version}`)
+  }
+  if (manifest.minSdkVersion !== undefined) {
+    lines.push(`Min SDK: ${manifest.minSdkVersion}`)
+  }
+  if (manifest.targetSdkVersion !== undefined) {
+    lines.push(`Target SDK: ${manifest.targetSdkVersion}`)
+  }
+  if (manifest.compileSdkVersion !== undefined) {
+    lines.push(`编译 SDK: ${manifest.compileSdkVersion}`)
+  }
+  if (modules.length > 0) {
+    lines.push(`模块: ${modules.join('、')}`)
+  }
+  if (abis.length > 0) {
+    lines.push(`ABI: ${abis.join('、')}`)
+  }
+  lines.push(`DEX: ${dexCount} 个`)
+  if (manifest.permissions.length > 0) {
+    lines.push(`权限: ${manifest.permissions.join('、')}`)
+  }
+  if (manifest.launcher?.name !== undefined) {
+    lines.push(`启动 Activity: ${manifest.launcher.name}`)
+  }
+  if (manifest.debuggable !== undefined) {
+    lines.push(`调试: ${manifest.debuggable === true ? '是' : '否'}`)
+  }
+  addSignatureCertificates(lines, v1Groups, verbose)
+  return lines
+}
+
+function verboseAabLines(lines, entries, manifest) {
+  lines.push('', 'ZIP 条目:')
+  for (const entry of entries) {
+    const method =
+      entry.method === 0 ? 'store' : entry.method === 8 ? 'deflate' : `method ${entry.method}`
+    lines.push(`- ${entry.name}（${entry.size} 字节，${method}）`)
+  }
+
+  const bundleConfig = findZipEntry(entries, 'BundleConfig.pb')
+  if (bundleConfig !== null) {
+    lines.push('', `BundleConfig.pb: ${bundleConfig.size} 字节`)
+  }
+
+  lines.push('', 'Manifest:')
+  if (manifest.label !== undefined) {
+    lines.push(`应用标签: ${manifest.label}`)
+  }
+  if (manifest.allowBackup !== undefined) {
+    lines.push(`允许备份: ${manifest.allowBackup === true ? '是' : '否'}`)
+  }
+  if (manifest.usesFeatures.length > 0) {
+    lines.push(`特性: ${manifest.usesFeatures.join('、')}`)
+  }
+  if (manifest.activities.length > 0) {
+    lines.push('Activity:')
+    for (const activity of manifest.activities) {
+      lines.push(`- ${activity.name}${activity.launcher ? '（启动）' : ''}`)
+    }
+  }
+}
+
+function parseAab(buffer, path, help) {
+  const eocd = readEndOfCentralDirectory(buffer, help)
+  const entries = readZipEntries(buffer, eocd, help)
+  const manifestEntry =
+    findZipEntry(entries, 'base/manifest/AndroidManifest.xml') ??
+    entries.find((entry) => /\/manifest\/AndroidManifest\.xml$/.test(entry.name))
+  if (manifestEntry === undefined || manifestEntry === null) {
+    throw new UsageError(`不是 AAB：${path} 里没有 */manifest/AndroidManifest.xml`, help())
+  }
+  const manifest = manifestFromDocument(
+    parseProtoXml(readZipEntryData(buffer, manifestEntry, help), help),
+    help,
+  )
+  const v1Groups = readV1Certificates(buffer, entries, help)
+  return { entries, manifest, v1Groups }
+}
+
+function runAab(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderAabHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(
+    argv,
+    AAB_OPTIONS,
+    renderAabHelp,
+    AAB_FLAGS,
+    AAB_MULTI_OPTIONS,
+  )
+  const verbose = resolveVerbose(options, env, renderAabHelp, ENV_AAB_VERBOSE)
+  const envPath = readEnv(env, ENV_AAB_FILE)
+  const optionPaths = options.get(OPTION_FILE)
+  const paths =
+    optionPaths === undefined
+      ? envPath === undefined
+        ? undefined
+        : [envPath]
+      : Array.isArray(optionPaths)
+        ? optionPaths
+        : [optionPaths]
+  if (paths === undefined) {
+    throw new UsageError(
+      `缺少必填参数: ${OPTION_FILE}（AAB 文件路径，可多个），可用环境变量 ${ENV_AAB_FILE}`,
+      renderAabHelp(),
+    )
+  }
+
+  for (const [index, path] of paths.entries()) {
+    const buffer = readApkFile(path, renderAabHelp)
+    const parsed = parseAab(buffer, path, renderAabHelp)
+    const lines = aabLines(
+      buffer,
+      path,
+      parsed.entries,
+      parsed.manifest,
+      parsed.v1Groups,
+      verbose,
+    )
+    if (verbose) {
+      verboseAabLines(lines, parsed.entries, parsed.manifest)
+    }
+    stdout(lines.join('\n'))
+    if (index < paths.length - 1) {
+      stdout('')
+    }
+  }
+  return EXIT_OK
+}
+
+export const aabCommand = {
+  name: AAB_COMMAND_NAME,
+  summary: '查看 AAB 安装包信息（包名 / SDK / 模块 / 签名证书）',
+  run: runAab,
 }
 
 export const apkCommand = {

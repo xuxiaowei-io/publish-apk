@@ -81,6 +81,11 @@ SHELL := /usr/bin/env bash
 #   APK_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   APK_ARGS      追加到 apk 命令末尾的额外参数，例如 APK_ARGS="--verbose"
 #
+# AAB 安装包查看可选变量（与厂商无关）：
+#   AAB_FILE      AAB 文件路径，等价于 aab 的 --file（必填，没有默认文件）
+#   AAB_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
+#   AAB_ARGS      追加到 aab 命令末尾的额外参数，例如 AAB_ARGS="--verbose"
+#
 # 鸿蒙签名配置可选变量（与命令读取的 HARMONY_* 环境变量同名）：
 #   HARMONY_STORE_FILE / HARMONY_PROFILE
 #                     p12 / p7b 路径；两者也接受 BASE64，等价于 --store-file / --profile
@@ -157,6 +162,9 @@ APP_ARGS ?=
 APK_FILE ?=
 APK_VERBOSE ?=
 APK_ARGS ?=
+AAB_FILE ?=
+AAB_VERBOSE ?=
+AAB_ARGS ?=
 HARMONY_STORE_FILE ?=
 HARMONY_STORE_FILE_OUT ?=
 HARMONY_CERTPATH ?=
@@ -192,6 +200,9 @@ appOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 # APK 变量使用同一套转发规则
 apkOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
+# AAB 变量使用同一套转发规则
+aabOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
 # 鸿蒙签名配置变量使用同一套转发规则（口令不在其中：只走环境变量或交互输入）
 harmonyOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
@@ -213,6 +224,9 @@ APP_FILE_ARGS = $(call appOption,APP_FILE,--file)
 
 # 组合 apk 的参数：APK_FILE 只在 make 命令行给出时转成 --file
 APK_FILE_ARGS = $(call apkOption,APK_FILE,--file)
+
+# 组合 aab 的参数：AAB_FILE 只在 make 命令行给出时转成 --file
+AAB_FILE_ARGS = $(call aabOption,AAB_FILE,--file)
 
 # 组合 huawei service-account 的参数：命令行给哪个变量就转哪个选项，都不给则完全回退环境变量
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
@@ -318,6 +332,12 @@ apk-help: ## 查看 APK 安装包帮助文档
 
 apk: ## 查看 APK 安装包信息（APK_FILE 必填；APK_VERBOSE 输出全部字段）
 	@node src/publish-apk.js apk $(APK_FILE_ARGS) $(APK_ARGS)
+
+aab-help: ## 查看 AAB 安装包帮助文档
+	node src/publish-apk.js aab --help
+
+aab: ## 查看 AAB 安装包信息（AAB_FILE 必填；AAB_VERBOSE 输出全部字段）
+	@node src/publish-apk.js aab $(AAB_FILE_ARGS) $(AAB_ARGS)
 
 # ------------------------------------------------------------------- 华为
 

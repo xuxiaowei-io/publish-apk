@@ -45,6 +45,7 @@ jobs:
           node src/publish-apk.js hap --help > /dev/null
           node src/publish-apk.js app --help > /dev/null
           node src/publish-apk.js apk --help > /dev/null
+          node src/publish-apk.js aab --help > /dev/null
           node src/publish-apk.js huawei --help > /dev/null
           node src/publish-apk.js huawei service-account --help > /dev/null
           node src/publish-apk.js huawei service-account-upload-url --help > /dev/null
