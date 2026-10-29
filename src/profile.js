@@ -279,7 +279,7 @@ function parseP7b(buffer, path, help) {
  *   signerInfos SET
  * }
  */
-function parseP7bDer(der) {
+export function parseP7bDer(der) {
   const contentInfo = readTlv(der, 0)
   if (contentInfo.tag !== TAG.SEQUENCE) {
     throw new Error('不是 PKCS#7 SignedData（P7B）文件')

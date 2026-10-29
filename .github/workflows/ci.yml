@@ -42,6 +42,7 @@ jobs:
           node src/publish-apk.js --version
           node src/publish-apk.js cert --help > /dev/null
           node src/publish-apk.js profile --help > /dev/null
+          node src/publish-apk.js hap --help > /dev/null
           node src/publish-apk.js huawei --help > /dev/null
           node src/publish-apk.js huawei service-account --help > /dev/null
           node src/publish-apk.js huawei service-account-upload-url --help > /dev/null
@@ -86,6 +87,80 @@ jobs:
 
           node src/publish-apk.js profile --file "$tmp/profile.p7b" > "$tmp/profile.txt"
           grep -q '^Bundle: com.example.smoke$' "$tmp/profile.txt"
+
+          # HAP：Python 生成最小 ZIP，验证 pack.info / module.json 与签名状态
+          python3 - "$tmp/smoke.hap" <<'PY'
+          import json
+          import sys
+          import zipfile
+
+          module = {
+              "app": {
+                  "bundleName": "com.example.smoke",
+                  "versionName": "1.0.0",
+                  "versionCode": 1,
+                  "bundleType": "app",
+                  "debug": False,
+                  "buildMode": "release",
+                  "minAPIVersion": 10,
+                  "targetAPIVersion": 26,
+                  "apiReleaseType": "Release",
+                  "vendor": "smoke",
+                  "label": "$string:app_name",
+                  "compileSdkVersion": "5.0.0",
+                  "compileSdkType": "HarmonyOS",
+              },
+              "module": {
+                  "name": "entry",
+                  "type": "entry",
+                  "deviceTypes": ["phone"],
+                  "mainElement": "EntryAbility",
+                  "deliveryWithInstall": True,
+                  "installationFree": False,
+                  "abilities": [{"name": "EntryAbility"}],
+                  "requestPermissions": [{"name": "ohos.permission.INTERNET"}],
+                  "pages": "$profile:main_pages",
+              },
+          }
+          pack = {
+              "summary": {
+                  "app": {
+                      "bundleName": "com.example.smoke",
+                      "bundleType": "app",
+                      "version": {"code": 1, "name": "1.0.0", "build": "1"},
+                  },
+                  "modules": [{
+                      "mainAbility": "EntryAbility",
+                      "deviceType": ["phone"],
+                      "abilities": [{"name": "EntryAbility"}],
+                      "distro": {
+                          "moduleType": "entry",
+                          "installationFree": False,
+                          "deliveryWithInstall": True,
+                          "moduleName": "entry",
+                      },
+                      "apiVersion": {"compatible": 10, "releaseType": "Release", "target": 26},
+                  }],
+              },
+              "packages": [{
+                  "deviceType": ["phone"],
+                  "moduleType": "entry",
+                  "deliveryWithInstall": True,
+                  "name": "entry-default",
+              }],
+          }
+          with zipfile.ZipFile(sys.argv[1], "w", zipfile.ZIP_DEFLATED) as archive:
+              archive.writestr("module.json", json.dumps(module))
+              archive.writestr("pack.info", json.dumps(pack))
+              archive.writestr("resources/rawfile/smoke.txt", "smoke" * 100)
+          PY
+
+          node src/publish-apk.js hap --file "$tmp/smoke.hap" > "$tmp/hap.txt"
+          grep -q '^包名: com.example.smoke$' "$tmp/hap.txt"
+          grep -q '^版本: 1.0.0 (1)$' "$tmp/hap.txt"
+          grep -q '^签名: 未签名' "$tmp/hap.txt"
+          node src/publish-apk.js hap --file "$tmp/smoke.hap" --verbose > /dev/null
+          HAP_FILE="$tmp/smoke.hap" node src/publish-apk.js hap > /dev/null
 
           # signing-config：material 生成 + 两串密文口令；不依赖 JDK
           HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \

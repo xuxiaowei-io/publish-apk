@@ -66,6 +66,11 @@ SHELL := /usr/bin/env bash
 #   PROFILE_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   PROFILE_ARGS      追加到 profile 命令末尾的额外参数，例如 PROFILE_ARGS="--verbose"
 #
+# HAP 安装包查看可选变量（与厂商无关）：
+#   HAP_FILE      HAP 文件路径，等价于 hap 的 --file（必填，没有默认文件）
+#   HAP_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
+#   HAP_ARGS      追加到 hap 命令末尾的额外参数，例如 HAP_ARGS="--verbose"
+#
 # 鸿蒙签名配置可选变量（与命令读取的 HARMONY_* 环境变量同名）：
 #   HARMONY_STORE_FILE / HARMONY_PROFILE
 #                     p12 / p7b 路径；两者也接受 BASE64，等价于 --store-file / --profile
@@ -133,6 +138,9 @@ CERT_ARGS ?=
 PROFILE_FILE ?=
 PROFILE_VERBOSE ?=
 PROFILE_ARGS ?=
+HAP_FILE ?=
+HAP_VERBOSE ?=
+HAP_ARGS ?=
 HARMONY_STORE_FILE ?=
 HARMONY_STORE_FILE_OUT ?=
 HARMONY_CERTPATH ?=
@@ -159,6 +167,9 @@ certOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 # P7B Profile 变量使用同一套转发规则
 profileOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
+# HAP 变量使用同一套转发规则
+hapOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
 # 鸿蒙签名配置变量使用同一套转发规则（口令不在其中：只走环境变量或交互输入）
 harmonyOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
@@ -171,6 +182,9 @@ CERT_FILE_ARGS = $(call certOption,CERT_FILE,--file)
 
 # 组合 profile 的参数：PROFILE_FILE 只在 make 命令行给出时转成 --file
 PROFILE_FILE_ARGS = $(call profileOption,PROFILE_FILE,--file)
+
+# 组合 hap 的参数：HAP_FILE 只在 make 命令行给出时转成 --file
+HAP_FILE_ARGS = $(call hapOption,HAP_FILE,--file)
 
 # 组合 huawei service-account 的参数：命令行给哪个变量就转哪个选项，都不给则完全回退环境变量
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
@@ -256,6 +270,14 @@ profile-help: ## 查看 P7B Provisioning Profile 帮助文档
 
 profile: ## 查看 P7B Provisioning Profile（PROFILE_FILE 必填；PROFILE_VERBOSE 输出全部字段）
 	@node src/publish-apk.js profile $(PROFILE_FILE_ARGS) $(PROFILE_ARGS)
+
+# ---------------------------------------------------------------- HAP 安装包
+
+hap-help: ## 查看 HAP 安装包帮助文档
+	node src/publish-apk.js hap --help
+
+hap: ## 查看 HAP 安装包信息（HAP_FILE 必填；HAP_VERBOSE 输出全部字段）
+	@node src/publish-apk.js hap $(HAP_FILE_ARGS) $(HAP_ARGS)
 
 # ------------------------------------------------------------------- 华为
 

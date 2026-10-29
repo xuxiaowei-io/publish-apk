@@ -5,7 +5,7 @@
  * 本文件保持**厂商无关**：只负责根帮助、版本号与命令分发。
  * 各厂商的命令与帮助文档放在各自模块里（当前有 src/huawei.js 与 src/google.js），
  * 新增厂商时实现 runXxx(argv, env) 并在下面 VENDORS 注册一行即可；
- * 与厂商无关的工具命令（当前有 src/cert.js 与 src/profile.js）注册到 TOOLS。
+ * 与厂商无关的工具命令（当前有 src/cert.js、src/profile.js、src/hap.js）注册到 TOOLS。
  *
  * 根命令已支持的行为：
  *   1. node src/publish-apk.js              输出根帮助文档
@@ -15,7 +15,8 @@
  *   5. node src/publish-apk.js <厂商> ...   分发给对应厂商模块（如 huawei / google）
  *   6. node src/publish-apk.js cert ...     查看证书 / PKCS#12 密钥库信息（与厂商无关的工具命令）
  *   7. node src/publish-apk.js profile ...  查看 P7B Provisioning Profile（与厂商无关的工具命令）
- *   8. node src/publish-apk.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
+ *   8. node src/publish-apk.js hap ...      查看 HAP 安装包信息（与厂商无关的工具命令）
+ *   9. node src/publish-apk.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
  *
  * 厂商命令的详细行为见各自模块的头部注释。
  *
@@ -39,6 +40,7 @@ import {
 } from './cli.js'
 import { renderHelp } from './help.js'
 import { certCommand } from './cert.js'
+import { hapCommand } from './hap.js'
 import { googleCommand } from './google.js'
 import { huaweiCommand } from './huawei.js'
 import { profileCommand } from './profile.js'
@@ -56,7 +58,7 @@ const VENDORS = [huaweiCommand, googleCommand]
  * 与厂商无关的工具命令表：形状与厂商命令相同，但只操作本地文件与通用密码学数据，
  * 不属于任何应用市场。新增工具（如证书、签名校验）在这里注册。
  */
-const TOOLS = [certCommand, profileCommand]
+const TOOLS = [certCommand, profileCommand, hapCommand]
 
 /** 根命令总表：厂商命令 + 工具命令；根帮助与命令分发都以它为准 */
 const COMMANDS = [...VENDORS, ...TOOLS]
@@ -106,6 +108,7 @@ function renderRootHelp() {
       `  ${PROGRAM} <厂商> <命令> --help   查看该命令的帮助文档`,
       `  ${PROGRAM} cert --file <文件>      查看证书 / PKCS#12 密钥库信息`,
       `  ${PROGRAM} profile --file <文件>   查看 P7B Provisioning Profile`,
+      `  ${PROGRAM} hap --file <文件>       查看 HAP 安装包信息`,
     ],
   })
 }
