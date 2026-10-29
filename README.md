@@ -2,12 +2,12 @@
 
 发布 APP 的命令行工具：为应用市场**获取鉴权令牌**、**上传安装包**并**登记软件包 / 发布版本**，供上传/发布流水线使用。
 当前支持华为应用市场（AppGallery Connect / AGC Connect API）与 Google Play（Android Publisher API v3）。
-另提供一个与厂商无关的 `cert` 命令，用于查看 X.509 证书与 PKCS#12 密钥库信息。
+另提供一个与厂商无关的 `cert` 命令（证书 / PKCS#12 密钥库）与 `profile` 命令（P7B Provisioning Profile）。
 
 - 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`）
 - `stdout` 只写结果、`stderr` 只写日志与错误，便于 `TOKEN=$(publish-apk …)` 与管道取用
 - 厂商隔离：根命令不认识任何厂商，华为相关实现全部在 [src/huawei.js](src/huawei.js)，Google Play 相关实现全部在 [src/google.js](src/google.js)；
-  与厂商无关的证书 / 密钥库查看在 [src/cert.js](src/cert.js)
+  与厂商无关的证书 / 密钥库查看在 [src/cert.js](src/cert.js)，P7B profile 查看在 [src/profile.js](src/profile.js)
 
 > 状态：`0.0.1-alpha.x` 早期版本，参数与输出可能调整，请以 `--help` 为准。
 
@@ -54,6 +54,7 @@ publish-apk                       # 根帮助
 publish-apk -v                    # 版本号
 publish-apk cert --file ./certpath.cer                    # 查看证书
 publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 密钥库
+publish-apk profile --file ./profile.p7b                  # 查看 P7B Provisioning Profile
 publish-apk huawei                # huawei 子命令帮助
 publish-apk huawei <命令> --help   # 某个子命令的帮助文档
 publish-apk google                # google 子命令帮助
@@ -85,6 +86,27 @@ CERT_VERBOSE=1 publish-apk cert --file ./a.cer   # 环境变量开启全部字�
 - PKCS#12 需要系统 `openssl` 命令（OpenSSL 1.1.1+ / LibreSSL）；项目仍然没有 npm 第三方依赖。
 - 输出是「标签: 值」的纯文本，值里的换行会被压成空格，保证一条信息只占一行；证书原文（PEM/DER）与私钥内容不打印。
 - `--verbose` 表示「输出全部字段」，不是运行日志；证书与密钥库信息属于结果，统一写 `stdout`。
+
+### profile（查看 P7B Provisioning Profile）
+
+与厂商无关的 P7B 查看工具：解析 PKCS#7 SignedData（DER / PEM），输出 profile 常用字段。
+华为 AppGallery 的 `profile.p7b` 内嵌一段 JSON（bundle、类型、有效期、设备、权限）与证书链。
+文件必须用 `--file`（或环境变量 `PROFILE_FILE`）显式指定，**没有默认文件**。
+
+```bash
+publish-apk profile --file ./profile.p7b           # 只输出常用字段
+publish-apk profile --file ./profile.p7b --verbose # 输出全部字段
+PROFILE_FILE=./profile.p7b publish-apk profile     # 环境变量形式
+PROFILE_VERBOSE=1 publish-apk profile --file ./profile.p7b
+```
+
+- 默认输出：类型、版本名称 / 代码、UUID、签发者、Bundle、开发者 ID、App ID、APL、App Feature、
+  生效 / 到期时间、状态（剩余天数）、设备数量、权限 / ACL / 应用特权 / 应用服务数量、签名证书数量、
+  开发证书 / 发布证书摘要。
+- `--verbose` / `PROFILE_VERBOSE=1` 追加：P7B 的摘要 / 签名算法与签名者、全部 JSON 字段
+  （设备 UDID、权限、ACL、服务能力等逐项一行）、签名证书链与开发 / 发布证书的完整字段。
+- 支持 DER 与 PEM 包裹的 PKCS#7；不输出证书 PEM 原文，P7B 里没有私钥。
+- 内嵌数据不是 JSON（例如纯证书 P7B）时仍会统计签名证书，并在 `--verbose` 里输出完整证书链与原因。
 
 ### huawei 子命令
 
@@ -357,7 +379,7 @@ publish-apk google upload-aab --package-name com.example.app --file ./app-releas
 
 ## 环境变量
 
-带值的选项都有同名环境变量兜底，**命令行选项优先**；开关型选项 `--verbose` 对应各厂商的 `*_VERBOSE`（`cert` 用 `CERT_VERBOSE`），取值规则见下表。
+带值的选项都有同名环境变量兜底，**命令行选项优先**；开关型选项 `--verbose` 对应各命令的 `*_VERBOSE`（`cert` 用 `CERT_VERBOSE`，`profile` 用 `PROFILE_VERBOSE`），取值规则见下表。
 
 ### 证书（`CERT_*`）
 
@@ -366,6 +388,13 @@ publish-apk google upload-aab --package-name com.example.app --file ./app-releas
 | `CERT_FILE` | `--file` | 证书 / PKCS#12 文件路径（PEM / DER / `.p12` / `.pfx`）；**必填**，没有默认文件 |
 | `CERT_PASSWORD` | `--password` | PKCS#12 密钥库密码；建议用环境变量，避免密码进入 `ps` / shell 历史 |
 | `CERT_VERBOSE` | `--verbose` | 输出全部字段：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
+
+### P7B Profile（`PROFILE_*`）
+
+| 环境变量 | 等价选项 | 说明 |
+| --- | --- | --- |
+| `PROFILE_FILE` | `--file` | P7B 文件路径（PKCS#7 SignedData，DER / PEM）；**必填**，没有默认文件 |
+| `PROFILE_VERBOSE` | `--verbose` | 输出全部字段：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 
 ### 华为（`HUAWEI_*`）
 
@@ -465,9 +494,10 @@ publish-apk google upload-aab
 
 ## 输出与退出代码约定
 
-- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书与 PKCS#12 信息），可直接被 `$(…)` 与 `jq` 取用。
+- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书、PKCS#12 与 P7B profile 信息），可直接被 `$(…)` 与 `jq` 取用。
 - `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` / `GOOGLE_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径、服务账号路径只显示掩码**，私钥与服务账号 JSON 数据永不写入日志（`--file` 的本地路径按原样打印，它不是凭证，出错时正是靠它定位）。
 - `cert` 的 `--verbose` / `CERT_VERBOSE` 是「输出全部证书 / 密钥库字段」而不是运行日志，信息统一写 `stdout`；PKCS#12 的私钥内容不会被输出。
+- `profile` 的 `--verbose` / `PROFILE_VERBOSE` 输出全部 profile JSON 字段与证书字段，信息同样写 `stdout`。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
 
@@ -481,6 +511,8 @@ make h                                           # 根帮助
 make cert CERT_FILE=./certpath.cer               # 查看证书
 CERT_PASSWORD=<密码> make cert CERT_FILE=./storeFile.p12  # 查看 PKCS#12（密码只走环境变量）
 make cert-help                                   # cert 命令帮助
+make profile PROFILE_FILE=./profile.p7b          # 查看 P7B Provisioning Profile
+make profile-help                                # profile 命令帮助
 make huawei-help                                 # huawei 子命令帮助
 make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
 make huawei-service-account-upload-url HUAWEI_APP_ID=xxx HUAWEI_FILE=./a1.apk
@@ -496,7 +528,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD` 还刻意不转成 `--password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD` 还刻意不转成 `--password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -511,6 +543,11 @@ make pack-check                                  # 查看 npm 发布物内容（
 
 - `openssl-pkcs12`（`cert` 命令查看 PKCS#12 时调用的系统命令）：
   <https://docs.openssl.org/master/man1/openssl-pkcs12/>
+
+### PKCS#7 / CMS
+
+- PKCS #7 / CMS SignedData（`profile` 命令解析的 P7B 结构）：
+  <https://datatracker.ietf.org/doc/html/rfc5652>
 
 ### 华为
 

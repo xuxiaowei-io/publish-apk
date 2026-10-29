@@ -4,7 +4,7 @@ SHELL := /usr/bin/env bash
 # Set default target when running 'make' without arguments
 .DEFAULT_GOAL := help
 
-# 本文件定义的变量一律以 HUAWEI_ / GOOGLE_ / CERT_ 开头（SHELL、MAKEFILE_LIST 等是 make 自带的特殊变量），
+# 本文件定义的变量一律以 HUAWEI_ / GOOGLE_ / CERT_ / PROFILE_ 开头（SHELL、MAKEFILE_LIST 等是 make 自带的特殊变量），
 # 因为系统环境里可能已经存在 PRIVATE_KEY、APP_ID、ARGS 这类通用名字：make 的 `?=` 会直接
 # 继承同名环境变量，于是 `make huawei-service-account` 会莫名其妙地带上 --private-key。
 #
@@ -61,6 +61,11 @@ SHELL := /usr/bin/env bash
 #   CERT_VERBOSE  等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   CERT_ARGS     追加到 cert 命令末尾的额外参数，例如 CERT_ARGS="--verbose"
 #
+# P7B Profile 查看可选变量（与厂商无关）：
+#   PROFILE_FILE      P7B 文件路径，等价于 profile 的 --file（必填，没有默认文件）
+#   PROFILE_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
+#   PROFILE_ARGS      追加到 profile 命令末尾的额外参数，例如 PROFILE_ARGS="--verbose"
+#
 # 转发规则：只有「make 命令行上显式传入」的变量才转成选项
 #   make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
 #   make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_TRACK=internal
@@ -108,6 +113,9 @@ CERT_FILE ?=
 CERT_PASSWORD ?=
 CERT_VERBOSE ?=
 CERT_ARGS ?=
+PROFILE_FILE ?=
+PROFILE_VERBOSE ?=
+PROFILE_ARGS ?=
 
 # $(call huaweiOption,变量名,选项名)：仅当该变量来自 make 命令行时，展开成 `选项 "值"`；
 # 来自环境变量的值不展开（$(origin) 会返回 environment），由命令自己读取。
@@ -119,9 +127,15 @@ googleOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 # 证书查看变量使用同一套转发规则
 certOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
+# P7B Profile 变量使用同一套转发规则
+profileOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
 # 组合 cert 的参数：CERT_FILE 只在 make 命令行给出时转成 --file；
 # --verbose 是开关，由命令读取 CERT_VERBOSE（转成 `--verbose "0"` 无法表达「关闭」）
 CERT_FILE_ARGS = $(call certOption,CERT_FILE,--file)
+
+# 组合 profile 的参数：PROFILE_FILE 只在 make 命令行给出时转成 --file
+PROFILE_FILE_ARGS = $(call profileOption,PROFILE_FILE,--file)
 
 # 组合 huawei service-account 的参数：命令行给哪个变量就转哪个选项，都不给则完全回退环境变量
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
@@ -173,6 +187,7 @@ help: ## Show help information
 # Mark targets as phony (not actual files)
 .PHONY: help h \
 	cert-help cert \
+	profile-help profile \
 	huawei-help \
 	huawei-service-account-help huawei-service-account \
 	huawei-service-account-upload-url-help huawei-service-account-upload-url \
@@ -197,6 +212,14 @@ cert-help: ## 查看证书 / PKCS#12 密钥库帮助文档
 
 cert: ## 查看证书 / PKCS#12 密钥库信息（CERT_FILE 必填；CERT_PASSWORD 传 PKCS#12 密码；CERT_VERBOSE 输出全部字段）
 	@node src/publish-apk.js cert $(CERT_FILE_ARGS) $(CERT_ARGS)
+
+# ---------------------------------------------------------------- P7B Profile
+
+profile-help: ## 查看 P7B Provisioning Profile 帮助文档
+	node src/publish-apk.js profile --help
+
+profile: ## 查看 P7B Provisioning Profile（PROFILE_FILE 必填；PROFILE_VERBOSE 输出全部字段）
+	@node src/publish-apk.js profile $(PROFILE_FILE_ARGS) $(PROFILE_ARGS)
 
 # ------------------------------------------------------------------- 华为
 

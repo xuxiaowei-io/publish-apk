@@ -184,6 +184,24 @@ function renderCertHelp() {
 function readInput(path, password, help) {
   const buffer = readCertificateFile(path, help)
   const text = buffer.toString('utf8')
+
+  // 结构化格式先判定：DER P7B 的 JSON 里可能内嵌 certificate PEM 字符串，
+  // 不能先做 PEM 正则扫描，否则会把 P7B 误当成一张 PEM 证书。
+  if (looksLikePkcs12(buffer)) {
+    return {
+      kind: 'pkcs12',
+      size: buffer.length,
+      ...readPkcs12(path, password, help),
+    }
+  }
+  if (
+    looksLikePkcs7(buffer) ||
+    text.includes('-----BEGIN PKCS7-----') ||
+    text.includes('-----BEGIN PKCS #7 SIGNED DATA-----')
+  ) {
+    throw new UsageError(`这是 P7B 文件: ${path}；请用 profile 命令查看`, help())
+  }
+
   const blocks = [...text.matchAll(PEM_BLOCK)].map((match) => match[0])
   if (blocks.length > 0) {
     return {
@@ -191,14 +209,6 @@ function readInput(path, password, help) {
       format: 'PEM',
       size: buffer.length,
       certificates: blocks.map((block, index) => parseCertificate(block, path, index, help)),
-    }
-  }
-  // PKCS#12 是二进制，先按结构判定，避免加密数据里恰好出现 PEM 头时被误判
-  if (looksLikePkcs12(buffer)) {
-    return {
-      kind: 'pkcs12',
-      size: buffer.length,
-      ...readPkcs12(path, password, help),
     }
   }
   if (text.includes('-----BEGIN CERTIFICATE-----')) {
@@ -240,6 +250,20 @@ function looksLikePkcs12(buffer) {
     const sequence = readTlv(buffer, 0)
     const version = readTlv(buffer, sequence.start)
     return version.tag === TAG.INTEGER && decodeInteger(buffer, version) === 3
+  } catch {
+    return false
+  }
+}
+
+/** 判断文件是不是 PKCS#7 SignedData（P7B）：ContentInfo 的 contentType 是 signedData OID */
+function looksLikePkcs7(buffer) {
+  if (buffer.length < 4 || buffer[0] !== TAG.SEQUENCE) {
+    return false
+  }
+  try {
+    const contentInfo = readTlv(buffer, 0)
+    const contentType = readTlv(buffer, contentInfo.start)
+    return contentType.tag === TAG.OID && decodeOid(buffer, contentType) === '1.2.840.113549.1.7.2'
   } catch {
     return false
   }
@@ -656,6 +680,16 @@ function certificateLines(certificate, verbose, parsed) {
   }
 
   return lines
+}
+
+/**
+ * 一张证书的完整输出行，供 profile 等命令复用。
+ *
+ * cert 命令内部已经在用 certificateLines；这里只包一层 DER 解析，避免其它模块
+ * 重复实现「证书 → 可读字段」的逻辑。
+ */
+export function certificateDetailLines(certificate, verbose = false) {
+  return certificateLines(certificate, verbose, parseCertificateDerSafe(certificate.raw))
 }
 
 /** 一张证书的全部输出行；多张证书时用 `#N` 标题分隔 */
