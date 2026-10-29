@@ -1,18 +1,20 @@
-# 把 GitHub 仓库的所有分支、所有标签同步到 Gitee、CNB、GitLink。
+# 把 GitHub 仓库的所有分支、所有标签同步到 Gitee、CNB、GitLink、GitCode。
 #
 # 每次触发都做全量同步：分支与标签数量很少，一次推送全部 ref 比逐个判断事件里的
 # ref 更简单，也不会因为事件合并、并发推送而漏同步；删除分支/标签同样靠全量同步传播。
 #
-# 三个平台通过 matrix 并行执行，fail-fast: false 让一个平台失败不影响其余平台。
+# 四个平台通过 matrix 并行执行，fail-fast: false 让一个平台失败不影响其余平台。
 #
 # 需要在 Settings -> Secrets and variables -> Actions 中配置：
 #   Secrets（令牌）：
 #     GITEE_TOKEN     Gitee 私人令牌（projects 读写权限）
 #     CNB_TOKEN       CNB 访问令牌
 #     GITLINK_TOKEN   GitLink 访问令牌
+#     GITCODE_TOKEN   GitCode 个人访问令牌（PAT）
 #   Variables（可选，用户名）：
 #     GITEE_USERNAME   默认 xuxiaowei-com-cn
 #     GITLINK_USERNAME 默认 xuxiaowei
+#     GITCODE_USERNAME 默认 qq_32596527
 #   组织仓库的 HTTPS 推送账号是个人账号，不是组织名；账号名不同时用 Variable 覆盖。
 #   CNB 的用户名固定为 cnb，无需配置。
 
@@ -56,6 +58,10 @@ jobs:
             token_env: GITLINK_TOKEN
             username_env: GITLINK_USERNAME
             url: https://www.gitlink.org.cn/xuxiaowei-io/publish-apk.git
+          - name: GitCode
+            token_env: GITCODE_TOKEN
+            username_env: GITCODE_USERNAME
+            url: https://gitcode.com/xuxiaowei-io/publish-apk.git
     env:
       # matrix 不能直接引用 secrets，这里先全部注入，再按 *_env 取用
       GITEE_USERNAME: ${{ vars.GITEE_USERNAME || 'xuxiaowei-com-cn' }}
@@ -64,6 +70,8 @@ jobs:
       CNB_TOKEN: ${{ secrets.CNB_TOKEN }}
       GITLINK_USERNAME: ${{ vars.GITLINK_USERNAME || 'xuxiaowei' }}
       GITLINK_TOKEN: ${{ secrets.GITLINK_TOKEN }}
+      GITCODE_USERNAME: ${{ vars.GITCODE_USERNAME || 'qq_32596527' }}
+      GITCODE_TOKEN: ${{ secrets.GITCODE_TOKEN }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
