@@ -609,33 +609,33 @@ function renderHap(
   const rawApp = kind === 'APP' ? innerApp ?? {} : app
   const module = moduleJson?.module ?? {}
 
-  const bundleName = pick(app.bundleName, packApp.bundleName)
-  const versionName = pick(app.versionName, packVersion.name)
-  const versionCode = pick(app.versionCode, packVersion.code)
-  const build = pick(app.buildVersion, packVersion.build)
-  const bundleType = pick(app.bundleType, packApp.bundleType)
+  const bundleName = pick(rawApp.bundleName, app.bundleName, packApp.bundleName)
+  const versionName = pick(rawApp.versionName, app.versionName, packVersion.name)
+  const versionCode = pick(rawApp.versionCode, app.versionCode, packVersion.code)
+  const build = pick(rawApp.buildVersion, app.buildVersion, packVersion.build)
+  const bundleType = pick(rawApp.bundleType, app.bundleType, packApp.bundleType)
   const moduleName = pick(module.name, distro.moduleName)
   const moduleType = pick(module.type, distro.moduleType, packageInfo.moduleType)
   const deviceTypes = values(pick(module.deviceTypes, summaryModule.deviceType, packageInfo.deviceType))
   const abilities = names(pick(module.abilities, summaryModule.abilities))
   const mainAbility = pick(summaryModule.mainAbility, module.mainElement)
   const permissions = names(module.requestPermissions)
-  const label = pick(app.label)
-  const vendor = pick(app.vendor)
+  const label = pick(rawApp.label, app.label)
+  const vendor = pick(rawApp.vendor, app.vendor)
   const compileSdk = pick(rawApp.compileSdkVersion)
-  const minApi = pick(api.compatible, app.minAPIVersion)
-  const targetApi = pick(api.target, app.targetAPIVersion)
+  const minApi = pick(api.compatible, rawApp.minAPIVersion, app.minAPIVersion)
+  const targetApi = pick(api.target, rawApp.targetAPIVersion, app.targetAPIVersion)
   const rawMinApi = pick(rawApp.minAPIVersion)
   const rawTargetApi = pick(rawApp.targetAPIVersion)
-  const releaseType = pick(api.releaseType, app.apiReleaseType)
+  const releaseType = pick(api.releaseType, rawApp.apiReleaseType, app.apiReleaseType)
   const deliveryWithInstall = pick(
     module.deliveryWithInstall,
     distro.deliveryWithInstall,
     packageInfo.deliveryWithInstall,
   )
   const installationFree = pick(module.installationFree, distro.installationFree)
-  const buildMode = pick(app.buildMode)
-  const debug = typeof app.debug === 'boolean' ? app.debug : undefined
+  const buildMode = pick(rawApp.buildMode, app.buildMode)
+  const debug = typeof rawApp.debug === 'boolean' ? rawApp.debug : undefined
 
   const lines = [
     `文件: ${path}`,
@@ -647,9 +647,6 @@ function renderHap(
   if (bundleName !== undefined) {
     lines.push(`包名: ${bundleName}`)
   }
-  if (bundleType !== undefined) {
-    lines.push(`包类型: ${bundleType}`)
-  }
   if (versionName !== undefined || versionCode !== undefined) {
     const version = [versionName, versionCode === undefined ? '' : `(${versionCode})`]
       .filter(Boolean)
@@ -658,6 +655,19 @@ function renderHap(
   }
   if (build !== undefined) {
     lines.push(`构建号: ${build}`)
+  }
+  const buildFields = []
+  if (debug !== undefined) {
+    buildFields.push(`debug=${debug}`)
+  }
+  if (buildMode !== undefined) {
+    buildFields.push(`buildMode=${buildMode}`)
+  }
+  if (bundleType !== undefined) {
+    buildFields.push(`bundleType=${bundleType}`)
+  }
+  if (buildFields.length > 0) {
+    lines.push(`构建: ${buildFields.join(', ')}`)
   }
   if (moduleName !== undefined || moduleType !== undefined) {
     const moduleText = [moduleName, moduleType === undefined ? '' : `（${moduleType}）`]
@@ -703,12 +713,6 @@ function renderHap(
     if (install.length > 0) {
       lines.push(`安装: ${install.join('，')}`)
     }
-  }
-  if (buildMode !== undefined) {
-    lines.push(`构建模式: ${buildMode}`)
-  }
-  if (debug !== undefined) {
-    lines.push(`调试: ${debug ? '是' : '否'}`)
   }
   if (permissions.length > 0) {
     lines.push(`权限: ${permissions.join('、')}`)
