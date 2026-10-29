@@ -1,26 +1,35 @@
 /**
- * 证书查看命令（`publish-apk cert`）。
+ * 证书 / 密钥库查看命令（`publish-apk cert`）。
  *
- * 定位：与具体应用市场无关的通用工具——读取 X.509 证书（PEM / DER），把信息逐行输出。
+ * 定位：与具体应用市场无关的通用工具——
+ *   - 读取 X.509 证书（PEM / DER），把信息逐行输出；
+ *   - 读取 PKCS#12 密钥库（.p12 / .pfx，Android 的 storeFile 就是这种格式），
+ *     输出每个别名的密钥算法、证书链与全部证书字段。
  * 证书文件必须用 --file（或环境变量 CERT_FILE）显式给出，不设默认值；
- * 本模块不假设文件名，certpath.cer 只是常见用法里的一个例子。
+ * 本模块不假设文件名，certpath.cer / storeFile.p12 只是常见用法里的例子。
  *
  * 两条输出规则：
  *   1. 每行一条信息，形如「标签: 值」；主题 / 颁发者里的多行 DN 会合并成一行，
  *      避免一张证书的信息散成多行、无法用 grep/awk 取用。
  *   2. 默认只输出常用字段；加 --verbose（或 CERT_VERBOSE=1）输出全部字段，
- *      包括 DN 的每一项、三种指纹、公钥细节与 X.509 扩展。
- *      证书原文（PEM/DER）不打印：它是文件内容而不是「信息」，需要时直接读取文件。
+ *      包括 DN 的每一项、三种指纹、公钥细节、X.509 扩展与 PKCS#12 的加密参数。
+ *      证书原文（PEM/DER）与私钥内容都不打印，需要时直接读取 --file 指向的文件。
  *
  * 为什么用 node:crypto 的 X509Certificate：项目约定零第三方依赖，node:crypto 自 Node 15.6
  * 起提供 X509Certificate，Node 18 已满足。它不提供签名算法与扩展解码（较新的 Node 才补了
  * signatureAlgorithm），因此本模块自带一个只读的 DER 解析器补齐这两类信息
- * （见 parseCertificateDer），不依赖 openssl 命令，Windows / CI 环境也能用。
+ * （见 parseCertificateDer）；解析 X.509 证书本身不依赖 openssl 命令，Windows / CI 环境也能用。
+ *
+ * PKCS#12 是例外：node:crypto 没有解析接口，本模块调用系统 openssl 解密
+ * （OpenSSL 1.1.1+ / LibreSSL 均可），再把解出的 PEM 交给 node:crypto 解析；
+ * 不引入 npm 依赖，也不会把私钥内容写进 stdout / stderr。
  *
  * 退出代码与其它命令一致：0 成功，1 参数错误或文件读取 / 解析失败。
  */
-import { createHash, X509Certificate } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
+import { createHash, createPrivateKey, createPublicKey, X509Certificate } from 'node:crypto'
 import { readFileSync } from 'node:fs'
+import process from 'node:process'
 
 import {
   EXIT_OK,
@@ -35,17 +44,21 @@ import { renderHelp } from './help.js'
 
 /** 命令名（根帮助与示例里使用） */
 const COMMAND_NAME = 'cert'
-/** 证书文件路径；不传时读默认文件 */
+/** 证书文件或 PKCS#12 密钥库路径；必填 */
 const OPTION_FILE = '--file'
+/** PKCS#12 密钥库密码（只对 .p12 / .pfx 生效） */
+const OPTION_PASSWORD = '--password'
 /** 开关：输出全部字段（默认只输出常用字段） */
 const OPTION_VERBOSE = '--verbose'
 /** cert 支持的全部选项 */
-const CERT_OPTIONS = new Set([OPTION_FILE, OPTION_VERBOSE])
+const CERT_OPTIONS = new Set([OPTION_FILE, OPTION_PASSWORD, OPTION_VERBOSE])
 /** cert 中的开关型选项（不带值） */
 const CERT_FLAGS = new Set([OPTION_VERBOSE])
 
-/** 证书文件路径，等价于 --file（必填） */
+/** 证书文件或 PKCS#12 密钥库路径，等价于 --file（必填） */
 const ENV_FILE = 'CERT_FILE'
+/** PKCS#12 密钥库密码，等价于 --password */
+const ENV_PASSWORD = 'CERT_PASSWORD'
 /** 开关：输出全部字段，等价于 --verbose */
 const ENV_VERBOSE = 'CERT_VERBOSE'
 
@@ -92,7 +105,7 @@ function resolveVerbose(options, env, help) {
 /** cert 命令帮助文档：--help、无参数以外的调用失败也会复用它 */
 function renderCertHelp() {
   return renderHelp({
-    title: `${PROGRAM} ${COMMAND_NAME} - 查看证书信息`,
+    title: `${PROGRAM} ${COMMAND_NAME} - 查看证书 / PKCS#12 密钥库信息`,
     usage: [`${PROGRAM} ${COMMAND_NAME} [选项]`],
     sections: [
       {
@@ -100,11 +113,15 @@ function renderCertHelp() {
         entries: [
           [
             `${OPTION_FILE} <路径>`,
-            `证书文件路径（PEM 或 DER，PEM 可含多张证书），必填（可用 ${ENV_FILE} 补齐）`,
+            `证书文件（PEM / DER）或 PKCS#12 密钥库（.p12 / .pfx）路径，必填（可用 ${ENV_FILE} 补齐）`,
+          ],
+          [
+            `${OPTION_PASSWORD} <密码>`,
+            `PKCS#12 密钥库密码；不传时先尝试空密码（可用 ${ENV_PASSWORD} 补齐）。会进入 ps / shell 历史，建议用环境变量`,
           ],
           [
             OPTION_VERBOSE,
-            `输出全部证书信息（默认只输出常用字段）；命令行未给出时读取 ${ENV_VERBOSE}`,
+            `输出全部字段（默认只输出常用字段）；命令行未给出时读取 ${ENV_VERBOSE}`,
           ],
           ['-h, --help', '显示帮助信息'],
         ],
@@ -112,14 +129,15 @@ function renderCertHelp() {
       {
         title: '环境变量',
         entries: [
-          [ENV_FILE, `证书文件路径，等价于 ${OPTION_FILE}`],
-          [ENV_VERBOSE, '输出全部证书信息，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
+          [ENV_FILE, `证书 / PKCS#12 文件路径，等价于 ${OPTION_FILE}`],
+          [ENV_PASSWORD, `PKCS#12 密钥库密码，等价于 ${OPTION_PASSWORD}（建议用环境变量，避免进入 ps）`],
+          [ENV_VERBOSE, '输出全部字段，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
         ],
       },
       {
         title: '输出',
         entries: [
-          ['stdout', '证书信息，每行一条「标签: 值」；--verbose 时输出全部字段'],
+          ['stdout', '证书或 PKCS#12 密钥库信息，每行一条「标签: 值」；--verbose 时输出全部字段'],
           ['stderr', '错误信息'],
         ],
       },
@@ -136,12 +154,15 @@ function renderCertHelp() {
       `  ${PROGRAM} ${COMMAND_NAME} --file ./certpath.cer`,
       `  ${PROGRAM} ${COMMAND_NAME} --file ./certpath.cer --verbose`,
       `  ${ENV_FILE}=./certpath.cer ${PROGRAM} ${COMMAND_NAME}`,
-      `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./certpath.cer`,
+      `  ${ENV_PASSWORD}=<密码> ${PROGRAM} ${COMMAND_NAME} --file ./storeFile.p12`,
+      `  ${PROGRAM} ${COMMAND_NAME} --file ./storeFile.p12 --password <密码> --verbose`,
       '',
-      '说明: 必须用 --file 或 CERT_FILE 指定证书文件，不提供默认文件',
-      '说明: 文件不存在、为空或不是合法证书时报错并退出 1',
-      '说明: --verbose 是「输出全部字段」，不是运行日志；证书信息属于结果，统一写 stdout',
-      '说明: 证书原文（PEM/DER）不输出，需要时直接读取 --file 指向的文件',
+      '说明: 必须用 --file 或 CERT_FILE 指定文件，不提供默认文件',
+      `说明: --file 支持 PEM / DER 证书与 PKCS#12 密钥库；PKCS#12 需要系统 openssl 命令（OpenSSL 1.1.1+ / LibreSSL）`,
+      '说明: --verbose 是「输出全部字段」，不是运行日志；证书与密钥库信息属于结果，统一写 stdout',
+      '说明: 证书原文（PEM/DER）与私钥内容都不输出，需要时直接读取 --file 指向的文件',
+      '说明: PKCS#12 只使用一个密码（Android 的 storePassword；keyPassword 通常与之相同）',
+      '说明: PKCS#12 密码也可以用 CERT_PASSWORD 传入，避免密码出现在命令行参数与 shell 历史里',
     ],
   })
 }
@@ -149,46 +170,78 @@ function renderCertHelp() {
 // ------------------------------------------------------------------ 文件读取
 
 /**
- * 读取证书文件并解析成 X509Certificate 列表。
- *
- * 支持两种格式：
+ * 读取输入文件并分派到三种格式：
  *   - PEM：按 `-----BEGIN CERTIFICATE-----` 块切分，一份文件里可以有多张证书（证书链）；
- *   - DER：整个文件就是一张证书的 DER 编码。
+ *   - DER：整个文件就是一张证书的 DER 编码；
+ *   - PKCS#12：Android 常见的 storeFile.p12 / .pfx，交给 readPkcs12 用 openssl 解密。
  *
  * 只要文件里出现 PEM 头就按 PEM 处理；有头但没有结束标记时报「格式无效」，
  * 而不是把半截文本丢给 X509Certificate 换一个更难懂的 OpenSSL 错误。
  *
- * @returns {{ format: 'PEM' | 'DER', size: number, certificates: X509Certificate[] }}
+ * @returns {{ kind: 'certs', format: 'PEM' | 'DER', size: number, certificates: X509Certificate[] }
+ *        | { kind: 'pkcs12', size: number, keys: object[], certs: object[], meta: object }}
  */
-function readCertificates(path, help) {
-  let buffer
-  try {
-    buffer = readFileSync(path)
-  } catch (error) {
-    // 路径是使用者刚给出的输入：原样给出，便于对照 --file / CERT_FILE 的值
-    if (error.code === 'ENOENT') {
-      throw new UsageError(`证书文件不存在: ${path}`, help())
-    }
-    throw new UsageError(`读取证书文件失败: ${path}: ${error.message}`, help())
-  }
-
+function readInput(path, password, help) {
+  const buffer = readCertificateFile(path, help)
   const text = buffer.toString('utf8')
   const blocks = [...text.matchAll(PEM_BLOCK)].map((match) => match[0])
   if (blocks.length > 0) {
     return {
+      kind: 'certs',
       format: 'PEM',
       size: buffer.length,
       certificates: blocks.map((block, index) => parseCertificate(block, path, index, help)),
     }
   }
+  // PKCS#12 是二进制，先按结构判定，避免加密数据里恰好出现 PEM 头时被误判
+  if (looksLikePkcs12(buffer)) {
+    return {
+      kind: 'pkcs12',
+      size: buffer.length,
+      ...readPkcs12(path, password, help),
+    }
+  }
   if (text.includes('-----BEGIN CERTIFICATE-----')) {
     throw new UsageError(`证书文件格式无效: ${path}（PEM 缺少 ${'-----END CERTIFICATE-----'}）`, help())
   }
-
   return {
+    kind: 'certs',
     format: 'DER',
     size: buffer.length,
     certificates: [parseCertificate(buffer, path, 0, help)],
+  }
+}
+
+/** 读取文件；路径错误统一转成带帮助文档的用法错误 */
+function readCertificateFile(path, help) {
+  try {
+    return readFileSync(path)
+  } catch (error) {
+    // 路径是使用者刚给出的输入：原样给出，便于对照 --file / CERT_FILE 的值
+    if (error.code === 'ENOENT') {
+      throw new UsageError(`文件不存在: ${path}`, help())
+    }
+    throw new UsageError(`读取文件失败: ${path}: ${error.message}`, help())
+  }
+}
+
+/**
+ * 判断文件是不是 PKCS#12（PFX）。
+ *
+ * PFX ::= SEQUENCE { version INTEGER (3), authSafe ContentInfo, macData ... }
+ * 所以「DER SEQUENCE 的第一个元素是 INTEGER 3」即可判定；普通 DER 证书的第一个元素
+ * 是 TBSCertificate（SEQUENCE），不会误判。PEM 文件在调用本函数前已经按 PEM 处理。
+ */
+function looksLikePkcs12(buffer) {
+  if (buffer.length < 4 || buffer[0] !== TAG.SEQUENCE) {
+    return false
+  }
+  try {
+    const sequence = readTlv(buffer, 0)
+    const version = readTlv(buffer, sequence.start)
+    return version.tag === TAG.INTEGER && decodeInteger(buffer, version) === 3
+  } catch {
+    return false
   }
 }
 
@@ -200,6 +253,207 @@ function parseCertificate(data, path, index, help) {
     const position = index === 0 ? '' : `（第 ${index + 1} 张证书）`
     throw new UsageError(`证书解析失败: ${path}${position}: ${error.message}`, help())
   }
+}
+
+// ------------------------------------------------------------- PKCS#12 读取
+
+/** openssl 的密码错误关键字（OpenSSL / LibreSSL 都是 Mac verify error） */
+const PASSWORD_ERROR = /mac verify|invalid password/i
+/** openssl 提示需要 legacy provider 的关键字（老 keystore 常用 RC2 / 3DES） */
+const LEGACY_ERROR = /legacy|unsupported|rc2|provider/i
+
+/**
+ * 用系统 openssl 解密 PKCS#12，并解析成 keys / certs / meta。
+ *
+ * 为什么调用外部命令：node:crypto 没有 PKCS#12 解析接口；自己实现 PBES2 / PBKDF2 /
+ * 3DES / RC2 的工作量和出错面都远大于调用系统 openssl。密码通过 stdin 传给 openssl
+ * （-passin stdin），不进入 argv；-nodes 解出的私钥只在本进程内存里用于识别算法，
+ * 绝不写入 stdout / stderr。
+ *
+ * 不传密码时先按空密码尝试：空密码的 keystore 很常见，直接可用；失败且是 MAC 校验错误
+ * 时才提示需要密码。
+ *
+ * @returns {{ meta: object, keys: object[], certs: object[] }}
+ */
+function readPkcs12(path, password, help) {
+  const secret = password ?? ''
+  if (/[\r\n\0]/.test(secret)) {
+    throw new UsageError('PKCS#12 密码不能包含换行或 NUL 字符', help())
+  }
+
+  let result = runOpenSslPkcs12(path, secret)
+  if (result.status !== 0 && LEGACY_ERROR.test(result.stderr)) {
+    // OpenSSL 3+ 默认不加载 legacy provider；老 keystore 可能用 RC2/3DES，失败后自动重试一次
+    const retry = runOpenSslPkcs12(path, secret, ['-legacy'])
+    if (retry.status === 0) {
+      result = retry
+    }
+  }
+
+  if (result.status !== 0) {
+    if (PASSWORD_ERROR.test(result.stderr)) {
+      const missing = password === undefined
+      throw new UsageError(
+        missing
+          ? `PKCS#12 密钥库需要密码: 请用 ${OPTION_PASSWORD} 或环境变量 ${ENV_PASSWORD}`
+          : 'PKCS#12 密码错误（或文件已损坏）',
+        help(),
+      )
+    }
+    throw new UsageError(`解析 PKCS#12 失败: ${summarizeOpenSslError(result.stderr)}`, help())
+  }
+
+  try {
+    return parsePkcs12Output(result.stdout, result.stderr)
+  } catch (error) {
+    throw new UsageError(`解析 PKCS#12 内容失败: ${error.message}`, help())
+  }
+}
+
+/** 执行一次 openssl pkcs12；密码只通过 stdin 传入，不出现在 argv */
+function runOpenSslPkcs12(path, password, extraArgs = []) {
+  const args = ['pkcs12', '-in', path, '-nodes', '-info', '-passin', 'stdin', ...extraArgs]
+  // 密码已经走 stdin，子进程不需要也不应该再继承 CERT_PASSWORD
+  const env = { ...process.env }
+  delete env.CERT_PASSWORD
+  const result = spawnSync('openssl', args, {
+    input: `${password}\n`,
+    encoding: 'utf8',
+    maxBuffer: 32 * 1024 * 1024,
+    timeout: 30_000,
+    env,
+  })
+  if (result.error) {
+    if (result.error.code === 'ENOENT') {
+      throw new Error(
+        '未找到 openssl 命令：读取 PKCS#12 需要系统安装 OpenSSL（macOS / Linux 通常自带，Windows 可用 Git Bash 自带的 openssl）',
+      )
+    }
+    throw new Error(`执行 openssl 失败: ${result.error.message}`)
+  }
+  if (result.signal) {
+    throw new Error(`执行 openssl 被信号 ${result.signal} 终止`)
+  }
+  return result
+}
+
+/** 把 openssl 的错误压缩成一行，避免把整段 provider 日志打到终端 */
+function summarizeOpenSslError(stderr) {
+  const lines = String(stderr)
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter((item) => item !== '')
+  return lines[0] ?? '未知错误'
+}
+
+/**
+ * 解析 `openssl pkcs12 -nodes -info` 的输出。
+ *
+ * stdout 里是 bag 属性 + PEM 证书 + PEM 私钥；stderr 里是 MAC 与加密参数。
+ * 只保留别名、localKeyID、KeyObject 与 X509Certificate，私钥 PEM 用完即丢弃。
+ *
+ * @returns {{ meta: object, keys: object[], certs: object[] }}
+ */
+function parsePkcs12Output(stdout, stderr) {
+  const errorText = String(stderr)
+  const macFromLine = /^MAC:\s*(.+)$/m.exec(errorText)?.[1]?.trim()
+  const macIteration = /^MAC Iteration\s+(\d+)\s*$/m.exec(errorText)?.[1]
+  const meta = {
+    // OpenSSL 3/4：`MAC: sha256, Iteration 2048`；LibreSSL：`MAC Iteration 2048`
+    mac: macFromLine ?? (macIteration === undefined ? undefined : `Iteration ${macIteration}`),
+    macVerified: /^MAC verified OK\s*$/m.test(errorText),
+    macLength: /^MAC length:\s*(.+)$/m.exec(errorText)?.[1]?.trim(),
+    contentEncryption: cleanOpenSslDetail(/^PKCS7 Encrypted data:\s*(.+)$/m.exec(errorText)?.[1]),
+    keyEncryption: cleanOpenSslDetail(/^Shrouded Keybag:\s*(.+)$/m.exec(errorText)?.[1]),
+  }
+
+  const keys = []
+  const certs = []
+  let alias
+  let localKeyId
+  let pem = null
+  let pemType = null
+
+  for (const rawLine of String(stdout).split(/\r?\n/)) {
+    const lineText = rawLine.trimEnd()
+    if (pem !== null) {
+      pem.push(lineText)
+      const end = lineText.trim()
+      if (
+        (pemType === 'cert' && end === '-----END CERTIFICATE-----') ||
+        (pemType === 'key' && /^-----END .*PRIVATE KEY-----$/.test(end))
+      ) {
+        const block = pem.join('\n')
+        if (pemType === 'cert') {
+          certs.push({ alias, localKeyId, certificate: new X509Certificate(block) })
+        } else {
+          let key
+          try {
+            key = createPrivateKey(block)
+          } catch {
+            // 解出来的私钥无法识别时不终止整个命令：证书信息仍然可用
+            key = null
+          }
+          keys.push({ alias, localKeyId, key })
+        }
+        pem = null
+        pemType = null
+      }
+      continue
+    }
+
+    if (/^Bag Attributes(?:: .*)?$/.test(lineText.trim())) {
+      // 包括 OpenSSL 的 `Bag Attributes: <No Attributes>`：链证书经常没有 bag 属性，
+      // 不能沿用上一张证书的别名 / localKeyID；后续按签发关系归组
+      alias = undefined
+      localKeyId = undefined
+      continue
+    }
+    const friendlyName = /^\s*friendlyName:\s*(.*)$/.exec(lineText)
+    if (friendlyName !== null) {
+      alias = friendlyName[1].trim() || undefined
+      continue
+    }
+    const localKey = /^\s*localKeyID:\s*(.*)$/.exec(lineText)
+    if (localKey !== null) {
+      localKeyId = normalizeLocalKeyId(localKey[1])
+      continue
+    }
+    if (lineText.trim() === '-----BEGIN CERTIFICATE-----') {
+      pem = [lineText.trim()]
+      pemType = 'cert'
+      continue
+    }
+    if (/^-----BEGIN .*PRIVATE KEY-----$/.test(lineText.trim())) {
+      pem = [lineText.trim()]
+      pemType = 'key'
+    }
+  }
+
+  if (pem !== null) {
+    throw new Error('openssl 输出中的 PEM 块不完整')
+  }
+  return { meta, keys, certs }
+}
+
+/** localKeyID 的字节串统一成大写、冒号分隔的形式（如 48 E9 → 48:E9） */
+function normalizeLocalKeyId(value) {
+  const bytes = value.trim().split(/\s+/).filter((item) => item !== '')
+  return bytes.length === 0 ? undefined : bytes.map((byte) => byte.toUpperCase()).join(':')
+}
+
+/**
+ * 清理 openssl `-info` 的加密参数。
+ *
+ * LibreSSL 会把 `PKCS7 Encrypted data:` 与下一行的 `Certificate bag` 挤在一起，
+ * 这不是算法名，丢掉；空值也丢掉，避免输出「私钥加密: 」这种噪音。
+ */
+function cleanOpenSslDetail(value) {
+  const detail = value?.trim()
+  if (detail === undefined || detail === '' || detail === 'Certificate bag') {
+    return undefined
+  }
+  return detail
 }
 
 // ------------------------------------------------------------------ 输出文本
@@ -422,6 +676,155 @@ function renderCertificates(path, { format, size, certificates }, verbose) {
   })
 
   return lines.join('\n')
+}
+
+/**
+ * PKCS#12 输出：密钥库摘要 + 每个别名的密钥算法与证书。
+ *
+ * 私钥只以算法形式出现（RSA / EC / Ed25519 等），不输出任何密钥材料；
+ * 证书与密钥的对应关系优先按 localKeyID，缺失时退回 friendlyName（别名）。
+ */
+function renderPkcs12(path, { size, keys, certs, meta }, verbose) {
+  const lines = [
+    line('文件', path),
+    line('格式', 'PKCS#12'),
+    ...(verbose ? [line('文件大小', `${size} 字节`)] : []),
+    line('密钥数量', keys.length),
+    line('证书数量', certs.length),
+  ]
+
+  if (verbose) {
+    if (meta.mac !== undefined) lines.push(line('MAC', meta.mac))
+    if (meta.macVerified) lines.push(line('MAC 校验', 'OK'))
+    if (meta.macLength !== undefined) lines.push(line('MAC 长度', meta.macLength))
+    if (meta.contentEncryption !== undefined) lines.push(line('内容加密', meta.contentEncryption))
+    if (meta.keyEncryption !== undefined) lines.push(line('私钥加密', meta.keyEncryption))
+  }
+
+  // 先按 localKeyID / 别名把证书归到密钥；剩下的按签发关系挂到证书链上
+  // （P12 里根证书通常没有 bag 属性，只能靠 issuer/subject 关系归组）
+  const groups = keys.map((key) => ({ key, certs: [] }))
+  const assigned = new Set()
+  for (const group of groups) {
+    for (const cert of certs) {
+      if (assigned.has(cert) || !belongsToKey(cert, group.key)) {
+        continue
+      }
+      group.certs.push(cert)
+      assigned.add(cert)
+    }
+  }
+  let changed = true
+  while (changed) {
+    changed = false
+    for (const cert of certs) {
+      if (assigned.has(cert)) {
+        continue
+      }
+      for (const group of groups) {
+        if (
+          group.certs.some(
+            (item) =>
+              isIssuedBy(cert.certificate, item.certificate) ||
+              isIssuedBy(item.certificate, cert.certificate),
+          )
+        ) {
+          group.certs.push(cert)
+          assigned.add(cert)
+          changed = true
+          break
+        }
+      }
+    }
+  }
+
+  let certNumber = 0
+  for (const group of groups) {
+    const key = group.key
+    // 密钥 bag 偶尔没有 friendlyName（只有证书 bag 有），用组内证书的别名兜底
+    const alias = key.alias ?? group.certs.find((cert) => cert.alias !== undefined)?.alias
+    const localKeyId =
+      key.localKeyId ?? group.certs.find((cert) => cert.localKeyId !== undefined)?.localKeyId
+    lines.push(line('别名', alias ?? '（无）'))
+    if (verbose && localKeyId !== undefined) {
+      lines.push(line('localKeyID', localKeyId))
+    }
+    lines.push(line('密钥算法', key.key === null ? '未知（无法解析私钥）' : describePublicKey(key.key)))
+    if (verbose && key.key !== null) {
+      lines.push(...keyDetailLines(key.key))
+    }
+    for (const cert of group.certs) {
+      certNumber += 1
+      lines.push('', `证书 #${certNumber}:`)
+      lines.push(...certificateLines(cert.certificate, verbose, parseCertificateDerSafe(cert.certificate.raw)))
+    }
+  }
+
+  for (const cert of certs) {
+    if (assigned.has(cert)) {
+      continue
+    }
+    lines.push(line('别名', cert.alias ?? '（无）'))
+    if (verbose && cert.localKeyId !== undefined) {
+      lines.push(line('localKeyID', cert.localKeyId))
+    }
+    certNumber += 1
+    lines.push('', `证书 #${certNumber}:`)
+    lines.push(...certificateLines(cert.certificate, verbose, parseCertificateDerSafe(cert.certificate.raw)))
+  }
+
+  return lines.join('\n')
+}
+
+/** 私钥的额外细节（--verbose）；只输出算法参数，不输出密钥材料 */
+function keyDetailLines(key) {
+  const details = key.asymmetricKeyDetails ?? {}
+  const lines = [line('密钥类型', key.asymmetricKeyType ?? '未知')]
+  if (details.namedCurve !== undefined) {
+    const nist = EC_CURVE_NIST[details.namedCurve]
+    lines.push(line('密钥曲线', `${details.namedCurve}${nist === undefined ? '' : `（NIST ${nist}）`}`))
+  }
+  if (details.modulusLength !== undefined) {
+    lines.push(line('密钥位数', `${details.modulusLength} 位`))
+  } else if (key.asymmetricKeyType === 'ed25519') {
+    lines.push(line('密钥位数', '256 位'))
+  } else if (key.asymmetricKeyType === 'ed448') {
+    lines.push(line('密钥位数', '448 位'))
+  } else if (details.namedCurve !== undefined && EC_CURVE_BITS[details.namedCurve] !== undefined) {
+    lines.push(line('密钥位数', `${EC_CURVE_BITS[details.namedCurve]} 位`))
+  }
+  return lines
+}
+
+/** 证书属于某个密钥：优先 localKeyID，其次别名，最后比较公钥（P12 没有 bag 属性时） */
+function belongsToKey(cert, key) {
+  if (cert.localKeyId !== undefined && key.localKeyId !== undefined) {
+    return cert.localKeyId === key.localKeyId
+  }
+  if (cert.alias !== undefined && key.alias !== undefined && cert.alias === key.alias) {
+    return true
+  }
+  return key.key !== null && samePublicKey(cert.certificate.publicKey, key.key)
+}
+
+/** 比较证书公钥与私钥对应的公钥是否一致（SPKI DER） */
+function samePublicKey(publicKey, privateKey) {
+  try {
+    const a = publicKey.export({ type: 'spki', format: 'der' })
+    const b = createPublicKey(privateKey).export({ type: 'spki', format: 'der' })
+    return a.equals(b)
+  } catch {
+    return false
+  }
+}
+
+/** cert 与 issuer 之间是否存在签发关系；无法校验时按「否」处理 */
+function isIssuedBy(cert, issuer) {
+  try {
+    return cert.checkIssued(issuer)
+  } catch {
+    return false
+  }
 }
 
 // ------------------------------------------------------------- DER 解析（补齐）
@@ -991,7 +1394,7 @@ function formatHexSummary(buffer) {
 
 // ------------------------------------------------------------------ 命令入口
 
-/** cert 命令：解析选项、读取证书并输出信息 */
+/** cert 命令：解析选项、读取证书 / PKCS#12，并输出信息 */
 function runCert(argv, env) {
   if (argv.some((token) => isHelpToken(token))) {
     stdout(renderCertHelp())
@@ -1003,24 +1406,29 @@ function runCert(argv, env) {
   const path = options.get(OPTION_FILE) ?? readEnv(env, ENV_FILE)
   if (path === undefined) {
     throw new UsageError(
-      `缺少必填参数: ${OPTION_FILE}（证书文件路径），可用环境变量 ${ENV_FILE}`,
+      `缺少必填参数: ${OPTION_FILE}（证书 / PKCS#12 文件路径），可用环境变量 ${ENV_FILE}`,
       renderCertHelp(),
     )
   }
+  const password = options.get(OPTION_PASSWORD) ?? readEnv(env, ENV_PASSWORD)
 
-  const certificates = readCertificates(path, renderCertHelp)
-  stdout(renderCertificates(path, certificates, verbose))
+  const input = readInput(path, password, renderCertHelp)
+  stdout(
+    input.kind === 'pkcs12'
+      ? renderPkcs12(path, input, verbose)
+      : renderCertificates(path, input, verbose),
+  )
   return EXIT_OK
 }
 
 /**
  * 证书命令描述，由 publish-apk.js 注册到根命令表。
  *
- * 与 huawei / google 不同，cert 不属于任何厂商：它只读本地证书文件，
+ * 与 huawei / google 不同，cert 不属于任何厂商：它只读本地证书 / 密钥库文件，
  * 因此单独放在 TOOLS 里，而不是 VENDORS。
  */
 export const certCommand = {
   name: COMMAND_NAME,
-  summary: '查看证书信息',
+  summary: '查看证书 / PKCS#12 密钥库信息',
   run: runCert,
 }

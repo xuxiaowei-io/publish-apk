@@ -2,12 +2,12 @@
 
 发布 APP 的命令行工具：为应用市场**获取鉴权令牌**、**上传安装包**并**登记软件包 / 发布版本**，供上传/发布流水线使用。
 当前支持华为应用市场（AppGallery Connect / AGC Connect API）与 Google Play（Android Publisher API v3）。
-另提供一个与厂商无关的 `cert` 命令，用于查看 X.509 证书信息。
+另提供一个与厂商无关的 `cert` 命令，用于查看 X.509 证书与 PKCS#12 密钥库信息。
 
-- 纯 Node.js 实现，**无任何第三方依赖**（只用 `node:crypto`、`node:fs`、内置 `fetch`）
+- 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`）
 - `stdout` 只写结果、`stderr` 只写日志与错误，便于 `TOKEN=$(publish-apk …)` 与管道取用
 - 厂商隔离：根命令不认识任何厂商，华为相关实现全部在 [src/huawei.js](src/huawei.js)，Google Play 相关实现全部在 [src/google.js](src/google.js)；
-  与厂商无关的证书查看在 [src/cert.js](src/cert.js)
+  与厂商无关的证书 / 密钥库查看在 [src/cert.js](src/cert.js)
 
 > 状态：`0.0.1-alpha.x` 早期版本，参数与输出可能调整，请以 `--help` 为准。
 
@@ -29,6 +29,7 @@
 ## 环境要求
 
 - Node.js **>= 18**（使用内置 `fetch` 与 `AbortSignal.timeout`）
+- 查看 PKCS#12（如 `storeFile.p12`）需要系统 `openssl` 命令（OpenSSL 1.1.1+ / LibreSSL）；其它功能只依赖 Node 内置模块
 
 ## 安装
 
@@ -51,31 +52,39 @@ node src/publish-apk.js huawei --help
 ```bash
 publish-apk                       # 根帮助
 publish-apk -v                    # 版本号
-publish-apk cert --file ./certpath.cer   # 查看证书信息
+publish-apk cert --file ./certpath.cer                    # 查看证书
+publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 密钥库
 publish-apk huawei                # huawei 子命令帮助
 publish-apk huawei <命令> --help   # 某个子命令的帮助文档
 publish-apk google                # google 子命令帮助
 publish-apk google <命令> --help   # 某个子命令的帮助文档
 ```
 
-### cert（查看证书信息）
+### cert（查看证书 / PKCS#12 密钥库信息）
 
-与厂商无关的本地工具：读取 X.509 证书，把信息**每行一条**写到 `stdout`。
-证书文件必须用 `--file`（或环境变量 `CERT_FILE`）显式指定，**没有默认文件**。
+与厂商无关的本地工具：读取 X.509 证书或 PKCS#12 密钥库，把信息**每行一条**写到 `stdout`。
+文件必须用 `--file`（或环境变量 `CERT_FILE`）显式指定，**没有默认文件**。
 
 ```bash
 publish-apk cert --file ./certpath.cer           # 只输出常用字段
 publish-apk cert --file ./certpath.cer --verbose # 输出全部字段
 CERT_FILE=./certpath.cer publish-apk cert        # 环境变量形式
+CERT_PASSWORD=<密码> publish-apk cert --file ./storeFile.p12
+publish-apk cert --file ./storeFile.p12 --password <密码> --verbose
 CERT_VERBOSE=1 publish-apk cert --file ./a.cer   # 环境变量开启全部字段
 ```
 
-- 默认字段：主题、颁发者、生效 / 到期时间、状态（剩余天数）、版本、序列号、签名算法、公钥算法、SHA-256 指纹、是否 CA、是否自签名。
+- 证书默认字段：主题、颁发者、生效 / 到期时间、状态（剩余天数）、版本、序列号、签名算法、公钥算法、SHA-256 指纹、是否 CA、是否自签名。
 - `--verbose` / `CERT_VERBOSE=1` 追加：主题与颁发者的每一项、GMT 时间、SHA-1 / SHA-512 指纹、公钥曲线 / 位数 / 指纹，
   以及 X.509 扩展（Key Usage、Basic Constraints、SKI / AKI、SAN、EKU、AIA、CRL 分发点、证书策略等）。
 - PEM 文件可以包含多张证书（证书链），按文件里的顺序逐张输出，并以 `证书 #N:` 分隔；DER 文件按一张证书处理。
-- 输出是「标签: 值」的纯文本，值里的换行会被压成空格，保证一条信息只占一行；证书原文（PEM/DER）不打印。
-- `--verbose` 表示「输出全部字段」，不是运行日志；证书信息属于结果，统一写 `stdout`。
+- PKCS#12（`.p12` / `.pfx`，Android 的 `storeFile`）输出密钥数量、证书数量、每个别名的密钥算法与证书链；
+  `--verbose` 追加 MAC / 加密参数、`localKeyID`、密钥曲线 / 位数与全部证书字段。私钥只显示算法，不输出任何密钥材料。
+- PKCS#12 密码用 `--password` 或 `CERT_PASSWORD` 传入；不传时先尝试空密码，失败再提示需要密码。
+  `--password` 会进入 `ps` / shell 历史，建议用 `CERT_PASSWORD`。PKCS#12 只使用一个密码（Android 的 `storePassword`；`keyPassword` 通常与之相同）。
+- PKCS#12 需要系统 `openssl` 命令（OpenSSL 1.1.1+ / LibreSSL）；项目仍然没有 npm 第三方依赖。
+- 输出是「标签: 值」的纯文本，值里的换行会被压成空格，保证一条信息只占一行；证书原文（PEM/DER）与私钥内容不打印。
+- `--verbose` 表示「输出全部字段」，不是运行日志；证书与密钥库信息属于结果，统一写 `stdout`。
 
 ### huawei 子命令
 
@@ -354,8 +363,9 @@ publish-apk google upload-aab --package-name com.example.app --file ./app-releas
 
 | 环境变量 | 等价选项 | 说明 |
 | --- | --- | --- |
-| `CERT_FILE` | `--file` | 证书文件路径（PEM / DER，PEM 可含多张证书）；**必填**，没有默认文件 |
-| `CERT_VERBOSE` | `--verbose` | 输出全部证书字段：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
+| `CERT_FILE` | `--file` | 证书 / PKCS#12 文件路径（PEM / DER / `.p12` / `.pfx`）；**必填**，没有默认文件 |
+| `CERT_PASSWORD` | `--password` | PKCS#12 密钥库密码；建议用环境变量，避免密码进入 `ps` / shell 历史 |
+| `CERT_VERBOSE` | `--verbose` | 输出全部字段：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 
 ### 华为（`HUAWEI_*`）
 
@@ -455,9 +465,9 @@ publish-apk google upload-aab
 
 ## 输出与退出代码约定
 
-- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书信息），可直接被 `$(…)` 与 `jq` 取用。
+- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书与 PKCS#12 信息），可直接被 `$(…)` 与 `jq` 取用。
 - `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` / `GOOGLE_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径、服务账号路径只显示掩码**，私钥与服务账号 JSON 数据永不写入日志（`--file` 的本地路径按原样打印，它不是凭证，出错时正是靠它定位）。
-- `cert` 的 `--verbose` / `CERT_VERBOSE` 是「输出全部证书字段」而不是运行日志，证书信息统一写 `stdout`。
+- `cert` 的 `--verbose` / `CERT_VERBOSE` 是「输出全部证书 / 密钥库字段」而不是运行日志，信息统一写 `stdout`；PKCS#12 的私钥内容不会被输出。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
 
@@ -468,7 +478,8 @@ publish-apk google upload-aab
 ```bash
 make help                                       # 目标列表
 make h                                           # 根帮助
-make cert CERT_FILE=./certpath.cer               # 查看证书信息（CERT_VERBOSE=1 输出全部字段）
+make cert CERT_FILE=./certpath.cer               # 查看证书
+CERT_PASSWORD=<密码> make cert CERT_FILE=./storeFile.p12  # 查看 PKCS#12（密码只走环境变量）
 make cert-help                                   # cert 命令帮助
 make huawei-help                                 # huawei 子命令帮助
 make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
@@ -485,7 +496,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD` 还刻意不转成 `--password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -495,6 +506,11 @@ make pack-check                                  # 查看 npm 发布物内容（
 
 - `X509Certificate`（`cert` 命令读取证书所用的内置能力）：
   <https://nodejs.org/api/crypto.html#class-x509certificate>
+
+### OpenSSL
+
+- `openssl-pkcs12`（`cert` 命令查看 PKCS#12 时调用的系统命令）：
+  <https://docs.openssl.org/master/man1/openssl-pkcs12/>
 
 ### 华为
 

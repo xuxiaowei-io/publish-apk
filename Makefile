@@ -55,7 +55,9 @@ SHELL := /usr/bin/env bash
 #     GOOGLE_TOKEN_URI 虽然也有 --token-uri 选项，但从 make 传值容易出现引号问题，统一走环境变量）
 #
 # 证书查看可选变量（与厂商无关）：
-#   CERT_FILE     证书文件路径，等价于 cert 的 --file（必填，没有默认文件）
+#   CERT_FILE     证书 / PKCS#12 文件路径，等价于 cert 的 --file（必填，没有默认文件）
+#   CERT_PASSWORD PKCS#12 密钥库密码；只经环境变量传给子进程，**不作选项转发**
+#                 （密码不进入命令行参数；也可用 cert 的 --password，但不推荐）
 #   CERT_VERBOSE  等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   CERT_ARGS     追加到 cert 命令末尾的额外参数，例如 CERT_ARGS="--verbose"
 #
@@ -103,6 +105,7 @@ GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW ?=
 GOOGLE_VERBOSE ?=
 GOOGLE_ARGS ?=
 CERT_FILE ?=
+CERT_PASSWORD ?=
 CERT_VERBOSE ?=
 CERT_ARGS ?=
 
@@ -189,10 +192,10 @@ h: ## 帮助文档
 
 # ---------------------------------------------------------------- 证书查看
 
-cert-help: ## 查看证书信息帮助文档
+cert-help: ## 查看证书 / PKCS#12 密钥库帮助文档
 	node src/publish-apk.js cert --help
 
-cert: ## 查看证书信息（CERT_FILE 必填；CERT_VERBOSE 输出全部字段）
+cert: ## 查看证书 / PKCS#12 密钥库信息（CERT_FILE 必填；CERT_PASSWORD 传 PKCS#12 密码；CERT_VERBOSE 输出全部字段）
 	@node src/publish-apk.js cert $(CERT_FILE_ARGS) $(CERT_ARGS)
 
 # ------------------------------------------------------------------- 华为

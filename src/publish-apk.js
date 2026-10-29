@@ -13,7 +13,7 @@
  *   3. node src/publish-apk.js --help       输出根帮助文档
  *   4. node src/publish-apk.js -v           输出版本号
  *   5. node src/publish-apk.js <厂商> ...   分发给对应厂商模块（如 huawei / google）
- *   6. node src/publish-apk.js cert ...     查看证书信息（与厂商无关的工具命令）
+ *   6. node src/publish-apk.js cert ...     查看证书 / PKCS#12 密钥库信息（与厂商无关的工具命令）
  *   7. node src/publish-apk.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
  *
  * 厂商命令的详细行为见各自模块的头部注释。
@@ -102,7 +102,7 @@ function renderRootHelp() {
       '示例:',
       `  ${PROGRAM} <厂商>                 查看该厂商的子命令`,
       `  ${PROGRAM} <厂商> <命令> --help   查看该命令的帮助文档`,
-      `  ${PROGRAM} cert --file <证书>      查看证书信息（--verbose 输出全部字段）`,
+      `  ${PROGRAM} cert --file <文件>      查看证书 / PKCS#12 密钥库信息`,
     ],
   })
 }
