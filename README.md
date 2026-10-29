@@ -61,6 +61,20 @@ publish-apk google                # google 子命令帮助
 publish-apk google <命令> --help   # 某个子命令的帮助文档
 ```
 
+### 为什么会有查看证书 / profile 的命令？
+
+本项目的主流程是把手机 APP 上传到应用商店；`cert` / `profile` 是**签名材料的本地核对工具**，不是上传流程中的一步。
+
+华为鸿蒙 APP 在打包 / 签名时需要 `.cer`、`.p12`、`.p7b` 三类文件。同一开发者账号下往往有多套证书与 Profile，文件名、别名、Bundle、有效期、设备范围都很接近，容易拿错；这两个命令把关键字段逐行列出，**主要用于区分多个鸿蒙证书 / Profile，确认当前签名配置用的是哪一份**：
+
+| 文件 | 作用 | 查看方式 |
+| --- | --- | --- |
+| `.cer` | X.509 证书 / 证书链（如 `certpath.cer`） | `publish-apk cert --file ./certpath.cer` |
+| `.p12` | PKCS#12 密钥库（如 `storeFile.p12`，含私钥与证书，需要密码） | `publish-apk cert --file ./storeFile.p12 --password <密码>` |
+| `.p7b` | 鸿蒙 Provisioning Profile（Bundle、有效期、设备、权限、证书链） | `publish-apk profile --file ./profile.p7b` |
+
+查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文；这两个命令只读取本地文件，不会访问应用商店。
+
 ### cert（查看证书 / PKCS#12 密钥库信息）
 
 与厂商无关的本地工具：读取 X.509 证书或 PKCS#12 密钥库，把信息**每行一条**写到 `stdout`。
