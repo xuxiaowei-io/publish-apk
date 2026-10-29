@@ -161,6 +161,7 @@ jobs:
           grep -q '^包名: com.example.smoke$' "$tmp/hap.txt"
           grep -q '^版本: 1.0.0 (1)$' "$tmp/hap.txt"
           grep -q '^签名: 未签名' "$tmp/hap.txt"
+          grep -q '^API 原始值: min 10 / target 26（compileSdk 5.0.0）$' "$tmp/hap.txt"
           node src/publish-apk.js hap --file "$tmp/smoke.hap" --verbose > /dev/null
           HAP_FILE="$tmp/smoke.hap" node src/publish-apk.js hap > /dev/null
           node src/publish-apk.js hap --file "$tmp/smoke.hap" "$tmp/smoke.hap" > "$tmp/hap-multi.txt"
@@ -186,6 +187,7 @@ jobs:
           grep -q '^内层模块: entry-default.hap' "$tmp/app.txt"
           grep -q '^pac.json: 数据处理 0 项、特殊 API 0 项$' "$tmp/app.txt"
           grep -q '^签名: 未签名' "$tmp/app.txt"
+          grep -q '^API 原始值: min 10 / target 26（compileSdk 5.0.0）$' "$tmp/app.txt"
           node src/publish-apk.js app --file "$tmp/smoke.app" --verbose > /dev/null
           APP_FILE="$tmp/smoke.app" node src/publish-apk.js app > /dev/null
           node src/publish-apk.js app --file "$tmp/smoke.app" "$tmp/smoke.app" > "$tmp/app-multi.txt"

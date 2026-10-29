@@ -144,7 +144,8 @@ function renderHapHelp() {
       `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./app.hap`,
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
-      '说明: HAP 是 ZIP，读取 pack.info / module.json；签名只检测 HAP 签名块并从内嵌 PKCS#7 提取证书，未执行验签',
+      '说明: HAP 是 ZIP，读取 pack.info / module.json；API 原始值取 module.json 的 minAPIVersion / targetAPIVersion / compileSdkVersion',
+      '说明: 签名只检测 HAP 签名块并从内嵌 PKCS#7 提取证书，未执行验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
       '说明: signed / unsigned 的包内容通常相同，区别在是否带 HAP 签名块',
       '说明: 不输出证书 PEM 原文；HAP 里没有私钥',
@@ -199,6 +200,7 @@ function renderAppHelp() {
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: APP 是 ZIP，含 pac.json、pack.info 与一个或多个内层 .hap / .hsp；本命令读取外层信息',
+      '说明: API 原始值取第一个内层 HAP 的 module.json（minAPIVersion / targetAPIVersion / compileSdkVersion）',
       '说明: 签名块在外层，内层 HAP 可能没有单独签名；签名证书从外层 PKCS#7 提取，未执行验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
       '说明: 不输出证书 PEM 原文；APP 里没有私钥',
@@ -591,6 +593,7 @@ function renderHap(
   const kind = options.kind ?? 'HAP'
   const pac = options.pac ?? null
   const innerModules = options.innerModules ?? []
+  const innerApp = options.innerApp ?? null
   const summary = pack?.summary ?? {}
   const packApp = summary.app ?? {}
   const packVersion = packApp.version ?? {}
@@ -603,6 +606,7 @@ function renderHap(
     .map((item) => item?.name)
     .filter((item) => typeof item === 'string' && item !== '')
   const app = moduleJson?.app ?? {}
+  const rawApp = kind === 'APP' ? innerApp ?? {} : app
   const module = moduleJson?.module ?? {}
 
   const bundleName = pick(app.bundleName, packApp.bundleName)
@@ -618,10 +622,11 @@ function renderHap(
   const permissions = names(module.requestPermissions)
   const label = pick(app.label)
   const vendor = pick(app.vendor)
-  const compileSdk = pick(app.compileSdkVersion)
-  const compileSdkType = pick(app.compileSdkType)
+  const compileSdk = pick(rawApp.compileSdkVersion)
   const minApi = pick(api.compatible, app.minAPIVersion)
   const targetApi = pick(api.target, app.targetAPIVersion)
+  const rawMinApi = pick(rawApp.minAPIVersion)
+  const rawTargetApi = pick(rawApp.targetAPIVersion)
   const releaseType = pick(api.releaseType, app.apiReleaseType)
   const deliveryWithInstall = pick(
     module.deliveryWithInstall,
@@ -679,6 +684,12 @@ function renderHap(
         .join(' / ') + (releaseType === undefined ? '' : `（${releaseType}）`)
     lines.push(`API: ${apiText}`)
   }
+  if (rawMinApi !== undefined || rawTargetApi !== undefined || compileSdk !== undefined) {
+    const rawApi =
+      [`min ${rawMinApi ?? '?'}`, `target ${rawTargetApi ?? '?'}`].join(' / ') +
+      (compileSdk === undefined ? '' : `（compileSdk ${compileSdk}）`)
+    lines.push(`API 原始值: ${rawApi}`)
+  }
   if (deliveryWithInstall !== undefined || installationFree !== undefined) {
     const install = []
     if (deliveryWithInstall === true) {
@@ -722,12 +733,6 @@ function renderHap(
     }
     if (vendor !== undefined) {
       lines.push(`厂商: ${vendor}`)
-    }
-    if (compileSdk !== undefined || compileSdkType !== undefined) {
-      const sdk = [compileSdk, compileSdkType === undefined ? '' : `（${compileSdkType}）`]
-        .filter(Boolean)
-        .join('')
-      lines.push(`编译 SDK: ${sdk}`)
     }
     if (packageNames.length > 0) {
       lines.push(`模块包: ${packageNames.join('、')}`)
@@ -787,6 +792,15 @@ function parseHap(buffer, path, help) {
   return { entries, pack, moduleJson, signature }
 }
 
+/** 从 APP 内层 HAP 的 module.json 里取 app 信息，用于 API 原始值 */
+function readInnerHapAppInfo(buffer, entry, help) {
+  const data = readZipEntryData(buffer, entry, help)
+  const eocd = readEndOfCentralDirectory(data, help)
+  const entries = readZipEntries(data, eocd, help)
+  const moduleJson = readJsonEntry(data, entries, 'module.json', help)
+  return moduleJson?.app ?? null
+}
+
 /** 按 APP 文件读取外层 ZIP、pack.info、pac.json、内层模块与签名块 */
 function parseApp(buffer, path, help) {
   const eocd = readEndOfCentralDirectory(buffer, help)
@@ -800,8 +814,20 @@ function parseApp(buffer, path, help) {
     )
   }
   const innerModules = entries.filter((entry) => /\.(hap|hsp)$/i.test(entry.name))
+  let innerApp = null
+  for (const entry of innerModules) {
+    if (!/\.hap$/i.test(entry.name)) {
+      continue
+    }
+    try {
+      innerApp = readInnerHapAppInfo(buffer, entry, help)
+      break
+    } catch {
+      // 内层 HAP 解析失败不影响外层 APP 信息；API 原始值留空
+    }
+  }
   const signature = readHapSignature(buffer, eocd.centralOffset)
-  return { entries, pack, pac, innerModules, signature }
+  return { entries, pack, pac, innerModules, innerApp, signature }
 }
 
 function readHapFile(path, help) {
@@ -914,7 +940,7 @@ function runApp(argv, env) {
         parsed.signature,
         certificateGroups,
         verbose,
-        { kind: 'APP', pac: parsed.pac, innerModules: parsed.innerModules },
+        { kind: 'APP', pac: parsed.pac, innerModules: parsed.innerModules, innerApp: parsed.innerApp },
       ),
     )
     if (index < paths.length - 1) {
