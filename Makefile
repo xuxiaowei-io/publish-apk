@@ -67,8 +67,13 @@ SHELL := /usr/bin/env bash
 #   PROFILE_ARGS      追加到 profile 命令末尾的额外参数，例如 PROFILE_ARGS="--verbose"
 #
 # 鸿蒙签名配置可选变量（与命令读取的 HARMONY_* 环境变量同名）：
-#   HARMONY_STORE_FILE / HARMONY_CERTPATH / HARMONY_PROFILE
-#                     p12 / cer / p7b 路径，等价于 signing-config 的 --store-file / --certpath / --profile
+#   HARMONY_STORE_FILE / HARMONY_PROFILE
+#                     p12 / p7b 路径；两者也接受 BASE64，等价于 --store-file / --profile
+#   HARMONY_STORE_FILE_OUT / HARMONY_PROFILE_OUT
+#                     p12 / p7b 内容/复制目标，等价于 --store-file-out / --profile-out
+#   HARMONY_CERTPATH  证书 .cer 路径，或 PEM 内容 / BASE64（内容含换行时建议用环境变量传入）
+#   HARMONY_CERTPATH_OUT
+#                     证书内容/复制目标，等价于 --certpath-out（默认 .p12 同级 certpath.cer）
 #   HARMONY_KEY_ALIAS 密钥别名，等价于 --key-alias（不传时用 keytool 自动识别）
 #   HARMONY_SIGN_ALG  签名算法，等价于 --sign-alg，默认 SHA256withECDSA
 #   HARMONY_CONFIG    build-profile.json5 路径，等价于 --config
@@ -129,8 +134,11 @@ PROFILE_FILE ?=
 PROFILE_VERBOSE ?=
 PROFILE_ARGS ?=
 HARMONY_STORE_FILE ?=
+HARMONY_STORE_FILE_OUT ?=
 HARMONY_CERTPATH ?=
+HARMONY_CERTPATH_OUT ?=
 HARMONY_PROFILE ?=
+HARMONY_PROFILE_OUT ?=
 HARMONY_KEY_ALIAS ?=
 HARMONY_SIGN_ALG ?=
 HARMONY_CONFIG ?=
@@ -155,7 +163,7 @@ profileOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 harmonyOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
 # 组合 signing-config 的参数
-HARMONY_SIGNING_ARGS = $(call harmonyOption,HARMONY_STORE_FILE,--store-file) $(call harmonyOption,HARMONY_CERTPATH,--certpath) $(call harmonyOption,HARMONY_PROFILE,--profile) $(call harmonyOption,HARMONY_KEY_ALIAS,--key-alias) $(call harmonyOption,HARMONY_SIGN_ALG,--sign-alg) $(call harmonyOption,HARMONY_CONFIG,--config) $(call harmonyOption,HARMONY_SIGNING_NAME,--name) $(call harmonyOption,HARMONY_PRODUCT,--product)
+HARMONY_SIGNING_ARGS = $(call harmonyOption,HARMONY_STORE_FILE,--store-file) $(call harmonyOption,HARMONY_STORE_FILE_OUT,--store-file-out) $(call harmonyOption,HARMONY_CERTPATH,--certpath) $(call harmonyOption,HARMONY_CERTPATH_OUT,--certpath-out) $(call harmonyOption,HARMONY_PROFILE,--profile) $(call harmonyOption,HARMONY_PROFILE_OUT,--profile-out) $(call harmonyOption,HARMONY_KEY_ALIAS,--key-alias) $(call harmonyOption,HARMONY_SIGN_ALG,--sign-alg) $(call harmonyOption,HARMONY_CONFIG,--config) $(call harmonyOption,HARMONY_SIGNING_NAME,--name) $(call harmonyOption,HARMONY_PRODUCT,--product)
 
 # 组合 cert 的参数：CERT_FILE 只在 make 命令行给出时转成 --file；
 # --verbose 是开关，由命令读取 CERT_VERBOSE（转成 `--verbose "0"` 无法表达「关闭」）
@@ -305,7 +313,7 @@ huawei-client-credentials-upload-file-package-info-update: ## 华为 上传文�
 huawei-signing-config-help: ## 华为 生成鸿蒙 build-profile.json5 签名配置帮助文档
 	node src/publish-apk.js huawei signing-config --help
 
-huawei-signing-config: ## 华为 生成鸿蒙 build-profile.json5 签名配置（HARMONY_STORE_FILE / HARMONY_CERTPATH / HARMONY_PROFILE 必填；口令用 HARMONY_STORE_PASSWORD；HARMONY_ARGS 追加 --write 等）
+huawei-signing-config: ## 华为 生成鸿蒙 build-profile.json5 签名配置（HARMONY_STORE_FILE / HARMONY_CERTPATH / HARMONY_PROFILE 必填，p12 / p7b 可用 BASE64；口令用 HARMONY_STORE_PASSWORD；HARMONY_ARGS 追加 --write 等）
 	@node src/publish-apk.js huawei signing-config $(HARMONY_SIGNING_ARGS) $(HARMONY_ARGS)
 
 # ------------------------------------------------------------- Google Play

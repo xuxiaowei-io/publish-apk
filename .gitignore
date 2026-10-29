@@ -43,4 +43,4 @@ build/
 
 # 签名配置 --write 的改前备份
 .signing/
-/material/
+material/

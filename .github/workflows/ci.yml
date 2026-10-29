@@ -101,6 +101,67 @@ jobs:
           ' "$tmp/signing.json"
           test -d "$tmp/material"
 
+          # 证书来自环境变量：PEM 内容
+          HARMONY_STORE_PASSWORD=smoke HARMONY_CERTPATH="$(cat "$tmp/cert.pem")" \
+            node src/publish-apk.js huawei signing-config \
+            --store-file "$tmp/storeFile.p12" --profile "$tmp/profile.p7b" \
+            --key-alias smoke --no-keytool --certpath-out "$tmp/cert-from-env.cer" \
+            > "$tmp/signing-env.json"
+          test -s "$tmp/cert-from-env.cer"
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (path.resolve(cfg.material.certpath) !== path.resolve(process.argv[2])) {
+              throw new Error("certpath mismatch");
+            }
+          ' "$tmp/signing-env.json" "$tmp/cert-from-env.cer"
+
+          # 证书来自环境变量：BASE64（DER）
+          cert_b64="$(openssl x509 -in "$tmp/cert.pem" -outform DER | openssl base64 -A)"
+          HARMONY_STORE_PASSWORD=smoke HARMONY_CERTPATH_BASE64="$cert_b64" \
+            node src/publish-apk.js huawei signing-config \
+            --store-file "$tmp/storeFile.p12" --profile "$tmp/profile.p7b" \
+            --key-alias smoke --no-keytool --certpath-out "$tmp/cert-from-b64.cer" \
+            > "$tmp/signing-b64.json"
+          test -s "$tmp/cert-from-b64.cer"
+          grep -q '^-----BEGIN CERTIFICATE-----' "$tmp/cert-from-b64.cer"
+
+          # .p12 来自 BASE64（命令行），material 生成在 --store-file-out 同级
+          store_b64="$(openssl base64 -A -in "$tmp/storeFile.p12")"
+          mkdir -p "$tmp/b64"
+          HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \
+            --store-file "$store_b64" --store-file-out "$tmp/b64/storeFile.p12" \
+            --certpath "$tmp/cert.pem" --profile "$tmp/profile.p7b" \
+            --key-alias smoke --no-keytool > "$tmp/signing-store-b64.json"
+          test -s "$tmp/b64/storeFile.p12"
+          test -d "$tmp/b64/material"
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (path.resolve(cfg.material.storeFile) !== path.resolve(process.argv[2])) {
+              throw new Error("storeFile mismatch");
+            }
+          ' "$tmp/signing-store-b64.json" "$tmp/b64/storeFile.p12"
+
+          # .p7b 来自 BASE64（命令行），写到 --profile-out，内容是 DER
+          profile_b64="$(openssl base64 -A -in "$tmp/profile.p7b")"
+          HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \
+            --store-file "$tmp/storeFile.p12" --certpath "$tmp/cert.pem" \
+            --profile "$profile_b64" --profile-out "$tmp/profile-from-b64.p7b" \
+            --key-alias smoke --no-keytool > "$tmp/signing-profile-b64.json"
+          test -s "$tmp/profile-from-b64.p7b"
+          test "$(od -An -tx1 -N1 "$tmp/profile-from-b64.p7b" | tr -d ' ')" = "30"
+          node -e '
+            const fs = require("node:fs");
+            const path = require("node:path");
+            const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (path.resolve(cfg.material.profile) !== path.resolve(process.argv[2])) {
+              throw new Error("profile mismatch");
+            }
+          ' "$tmp/signing-profile-b64.json" "$tmp/profile-from-b64.p7b"
+
           # --write：只更新同名 signingConfig 的 material
           printf '%s\n' '{"app":{"signingConfigs":[{"name":"default","type":"HarmonyOS","material":{}}]}}' \
             > "$tmp/build-profile.json5"

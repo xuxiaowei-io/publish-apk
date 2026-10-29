@@ -161,7 +161,37 @@ HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-config \
   --write
 ```
 
+证书也可以不落成 `.cer` 文件，直接把内容或 BASE64 放进环境变量：
+
+```bash
+# PEM 内容
+HARMONY_STORE_PASSWORD=<p12口令> HARMONY_CERTPATH="$(cat certpath.cer)" \
+  publish-apk huawei signing-config --store-file ./storeFile.p12 \
+  --profile ./profile.p7b --certpath-out ./certpath.cer
+
+# BASE64（DER 证书）
+HARMONY_STORE_PASSWORD=<p12口令> \
+HARMONY_CERTPATH_BASE64="$(openssl x509 -in certpath.cer -outform DER | openssl base64 -A)" \
+  publish-apk huawei signing-config --store-file ./storeFile.p12 \
+  --profile ./profile.p7b --certpath-out ./certpath.cer
+
+# .p12 也可以来自 BASE64
+HARMONY_STORE_PASSWORD=<p12口令> \
+HARMONY_STORE_FILE_BASE64="$(openssl base64 -A -in storeFile.p12)" \
+  publish-apk huawei signing-config --store-file-out ./storeFile.p12 \
+  --certpath ./certpath.cer --profile ./profile.p7b
+
+# .p7b 也可以来自 BASE64
+HARMONY_STORE_PASSWORD=<p12口令> \
+HARMONY_PROFILE_BASE64="$(openssl base64 -A -in profile.p7b)" \
+  publish-apk huawei signing-config --store-file ./storeFile.p12 \
+  --certpath ./certpath.cer --profile-out ./profile.p7b
+```
+
 - `.p12` / `.cer` / `.p7b` 都必填；`material/` 固定生成在 `.p12` 同级目录（hvigor 的 DecipherUtil 从这里取 workKey），已有可用 material 会复用。
+- `--store-file` / `HARMONY_STORE_FILE` / `HARMONY_STORE_FILE_BASE64` 除了 `.p12` 路径，也接受 **BASE64**；内容会写到 `--store-file-out`，未给时写到当前目录的 `storeFile.p12`；已有不同文件会先备份再覆盖。
+- `--certpath` / `HARMONY_CERTPATH` 除了 `.cer` 路径，也接受 **PEM 内容**或 **BASE64**（DER 或 PEM）；内容会写到 `--certpath-out`，未给时写到 `.p12` 同级的 `certpath.cer`；已有不同证书会先备份再覆盖。
+- `--profile` / `HARMONY_PROFILE` / `HARMONY_PROFILE_BASE64` 除了 `.p7b` 路径，也接受 **BASE64**；内容会写到 `--profile-out`，未给时写到 `.p12` 同级的 `profile.p7b`；已有不同 profile 会先备份再覆盖。
 - `--key-alias` 不传时用 `keytool` 从 `.p12` 读取；keytool 还会用 `-certreq` 自检两个明文口令能否打开私钥。
 - 不给 `--write` 时只把 `signingConfig` JSON 写到 `stdout`，方便手工粘贴；`--write` 只更新同名 `signingConfig` 的 `material`，改前备份到 `build-profile.json5` 所在目录的 `.signing/backup/`。
 - 明文口令优先用 `HARMONY_STORE_PASSWORD` / `HARMONY_KEY_PASSWORD`，也可以交互输入；`--store-password` / `--key-password` 会进入 shell 历史，不推荐。
@@ -479,9 +509,14 @@ publish-apk huawei service-account-upload-url
 
 | 环境变量 | 等价选项 | 说明 |
 | --- | --- | --- |
-| `HARMONY_STORE_FILE` | `--store-file` | 鸿蒙签名密钥库 `.p12` |
-| `HARMONY_CERTPATH` | `--certpath` | 鸿蒙签名证书 `.cer` |
-| `HARMONY_PROFILE` | `--profile` | 鸿蒙 Provisioning Profile `.p7b` |
+| `HARMONY_STORE_FILE` | `--store-file` | 鸿蒙签名密钥库 `.p12` 路径，或 BASE64 |
+| `HARMONY_STORE_FILE_BASE64` | `--store-file` | BASE64 的 `.p12`（别名） |
+| `HARMONY_STORE_FILE_OUT` | `--store-file-out` | p12 内容/复制目标；默认当前目录的 `storeFile.p12` |
+| `HARMONY_CERTPATH` | `--certpath` | 鸿蒙签名证书 `.cer` 路径，或直接给 PEM 内容 / BASE64（DER 或 PEM）；也接受 `HARMONY_CERT`、`HARMONY_CERTPATH_BASE64`、`HARMONY_CERT_BASE64` |
+| `HARMONY_CERTPATH_OUT` | `--certpath-out` | 证书内容/复制目标；默认 `.p12` 同级的 `certpath.cer` |
+| `HARMONY_PROFILE` | `--profile` | 鸿蒙 Provisioning Profile `.p7b` 路径，或 BASE64 |
+| `HARMONY_PROFILE_BASE64` | `--profile` | BASE64 的 `.p7b`（别名） |
+| `HARMONY_PROFILE_OUT` | `--profile-out` | profile 内容/复制目标；默认 `.p12` 同级的 `profile.p7b` |
 | `HARMONY_KEY_ALIAS` | `--key-alias` | p12 里的密钥别名；不传时用 keytool 自动读取 |
 | `HARMONY_SIGN_ALG` | `--sign-alg` | 签名算法，默认 `SHA256withECDSA` |
 | `HARMONY_STORE_PASSWORD` | `--store-password` | `.p12` 明文口令；推荐用环境变量/交互输入；make 只把它作为环境变量传给子进程，不转成 `--store-password` |

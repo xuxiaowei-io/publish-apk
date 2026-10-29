@@ -17,7 +17,7 @@
  *   - material 是解开密文的唯一钥匙，不能删、不能入库。
  */
 import { spawnSync } from 'node:child_process'
-import { createHash, randomBytes } from 'node:crypto'
+import { createHash, randomBytes, X509Certificate } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -34,14 +34,18 @@ import {
   stdout,
 } from './cli.js'
 import { decryptSecret, encryptSecret, generateMaterial, readMaterialKey } from './harmony-material.js'
+import { normalizePemText } from './jwt.js'
 import { renderHelp } from './help.js'
 
 /** 命令名（huawei 子命令） */
 const COMMAND_NAME = 'signing-config'
 
 const OPTION_STORE_FILE = '--store-file'
+const OPTION_STORE_FILE_OUT = '--store-file-out'
 const OPTION_CERTPATH = '--certpath'
+const OPTION_CERTPATH_OUT = '--certpath-out'
 const OPTION_PROFILE = '--profile'
+const OPTION_PROFILE_OUT = '--profile-out'
 const OPTION_KEY_ALIAS = '--key-alias'
 const OPTION_SIGN_ALG = '--sign-alg'
 const OPTION_STORE_PASSWORD = '--store-password'
@@ -57,8 +61,11 @@ const OPTION_NO_KEYTOOL = '--no-keytool'
 
 const SIGNING_OPTIONS = new Set([
   OPTION_STORE_FILE,
+  OPTION_STORE_FILE_OUT,
   OPTION_CERTPATH,
+  OPTION_CERTPATH_OUT,
   OPTION_PROFILE,
+  OPTION_PROFILE_OUT,
   OPTION_KEY_ALIAS,
   OPTION_SIGN_ALG,
   OPTION_STORE_PASSWORD,
@@ -75,8 +82,16 @@ const SIGNING_OPTIONS = new Set([
 const SIGNING_FLAGS = new Set([OPTION_WRITE, OPTION_NEW_MATERIAL, OPTION_NO_KEYTOOL])
 
 const ENV_STORE_FILE = 'HARMONY_STORE_FILE'
+const ENV_STORE_FILE_BASE64 = 'HARMONY_STORE_FILE_BASE64'
+const ENV_STORE_FILE_OUT = 'HARMONY_STORE_FILE_OUT'
 const ENV_CERTPATH = 'HARMONY_CERTPATH'
+const ENV_CERT = 'HARMONY_CERT'
+const ENV_CERTPATH_BASE64 = 'HARMONY_CERTPATH_BASE64'
+const ENV_CERT_BASE64 = 'HARMONY_CERT_BASE64'
+const ENV_CERTPATH_OUT = 'HARMONY_CERTPATH_OUT'
 const ENV_PROFILE = 'HARMONY_PROFILE'
+const ENV_PROFILE_BASE64 = 'HARMONY_PROFILE_BASE64'
+const ENV_PROFILE_OUT = 'HARMONY_PROFILE_OUT'
 const ENV_KEY_ALIAS = 'HARMONY_KEY_ALIAS'
 const ENV_SIGN_ALG = 'HARMONY_SIGN_ALG'
 const ENV_STORE_PASSWORD = 'HARMONY_STORE_PASSWORD'
@@ -109,9 +124,30 @@ function renderSigningConfigHelp() {
       {
         title: '选项',
         entries: [
-          [`${OPTION_STORE_FILE} <文件>`, `鸿蒙签名密钥库 .p12，必填（可用 ${ENV_STORE_FILE} 补齐）`],
-          [`${OPTION_CERTPATH} <文件>`, `鸿蒙签名证书 .cer，必填（可用 ${ENV_CERTPATH} 补齐）`],
-          [`${OPTION_PROFILE} <文件>`, `鸿蒙 Provisioning Profile .p7b，必填（可用 ${ENV_PROFILE} 补齐）`],
+          [
+            `${OPTION_STORE_FILE} <文件|BASE64>`,
+            `鸿蒙签名密钥库 .p12 路径，或直接给 BASE64，必填（可用 ${ENV_STORE_FILE} / ${ENV_STORE_FILE_BASE64} 补齐）`,
+          ],
+          [
+            `${OPTION_STORE_FILE_OUT} <文件>`,
+            `p12 内容/复制目标；默认当前目录的 storeFile.p12（可用 ${ENV_STORE_FILE_OUT} 补齐）`,
+          ],
+          [
+            `${OPTION_CERTPATH} <文件|PEM|BASE64>`,
+            `鸿蒙签名证书 .cer 路径，或直接给 PEM 内容 / BASE64（DER 或 PEM），必填（可用 ${ENV_CERTPATH} 补齐）`,
+          ],
+          [
+            `${OPTION_CERTPATH_OUT} <文件>`,
+            `证书内容/复制目标；默认 .p12 同级的 certpath.cer（可用 ${ENV_CERTPATH_OUT} 补齐）`,
+          ],
+          [
+            `${OPTION_PROFILE} <文件|BASE64>`,
+            `鸿蒙 Provisioning Profile .p7b 路径，或直接给 BASE64，必填（可用 ${ENV_PROFILE} / ${ENV_PROFILE_BASE64} 补齐）`,
+          ],
+          [
+            `${OPTION_PROFILE_OUT} <文件>`,
+            `profile 内容/复制目标；默认 .p12 同级的 profile.p7b（可用 ${ENV_PROFILE_OUT} 补齐）`,
+          ],
           [`${OPTION_KEY_ALIAS} <别名>`, `p12 里的密钥别名；不传时用 keytool 自动读取（可用 ${ENV_KEY_ALIAS} 补齐）`],
           [`${OPTION_SIGN_ALG} <算法>`, `签名算法，默认 ${DEFAULT_SIGN_ALG}（可用 ${ENV_SIGN_ALG} 补齐）`],
           [
@@ -139,9 +175,17 @@ function renderSigningConfigHelp() {
       {
         title: '环境变量',
         entries: [
-          [ENV_STORE_FILE, `等价于 ${OPTION_STORE_FILE}`],
-          [ENV_CERTPATH, `等价于 ${OPTION_CERTPATH}`],
-          [ENV_PROFILE, `等价于 ${OPTION_PROFILE}`],
+          [ENV_STORE_FILE, `等价于 ${OPTION_STORE_FILE}；可以是路径或 BASE64`],
+          [ENV_STORE_FILE_BASE64, `BASE64 的 .p12，等价于 ${OPTION_STORE_FILE}`],
+          [ENV_STORE_FILE_OUT, `等价于 ${OPTION_STORE_FILE_OUT}`],
+          [ENV_CERTPATH, `等价于 ${OPTION_CERTPATH}；可以是路径、PEM 内容或 BASE64`],
+          [ENV_CERT, `证书来源别名，等价于 ${OPTION_CERTPATH}`],
+          [ENV_CERTPATH_BASE64, `BASE64 证书（DER / PEM），等价于 ${OPTION_CERTPATH}`],
+          [ENV_CERT_BASE64, `BASE64 证书别名，等价于 ${OPTION_CERTPATH}`],
+          [ENV_CERTPATH_OUT, `等价于 ${OPTION_CERTPATH_OUT}`],
+          [ENV_PROFILE, `等价于 ${OPTION_PROFILE}；可以是路径或 BASE64`],
+          [ENV_PROFILE_BASE64, `BASE64 的 .p7b，等价于 ${OPTION_PROFILE}`],
+          [ENV_PROFILE_OUT, `等价于 ${OPTION_PROFILE_OUT}`],
           [ENV_KEY_ALIAS, `等价于 ${OPTION_KEY_ALIAS}`],
           [ENV_SIGN_ALG, `等价于 ${OPTION_SIGN_ALG}`],
           [ENV_STORE_PASSWORD, `等价于 ${OPTION_STORE_PASSWORD}（推荐）`],
@@ -175,6 +219,11 @@ function renderSigningConfigHelp() {
       `    --certpath ./certpath.cer --profile ./profile.p7b`,
       '',
       '说明: material 固定生成在 .p12 同级目录的 material/ 下；hvigor 的 DecipherUtil 从这里取 workKey',
+      '说明: --store-file / HARMONY_STORE_FILE / HARMONY_STORE_FILE_BASE64 支持 .p12 路径或 BASE64；内容会写到 --store-file-out 或当前目录的 storeFile.p12',
+      '说明: --profile / HARMONY_PROFILE / HARMONY_PROFILE_BASE64 支持 .p7b 路径或 BASE64；内容会写到 --profile-out 或 .p12 同级的 profile.p7b',
+      '说明: 覆盖已有 .p12 前会先备份；内容与现有文件相同则直接复用',
+      '说明: --certpath / HARMONY_CERTPATH 支持 .cer 路径、PEM 内容、BASE64（DER 或 PEM）；内容会写到 --certpath-out 或 .p12 同级的 certpath.cer',
+      '说明: 覆盖已有证书前会先备份；内容与现有证书相同则直接复用',
       '说明: material 与本机绑定，删掉后两串密文就无法解密；它和 .p12 一样不能入库',
       '说明: --write 只更新已存在的同名 signingConfig 的 material；没有同名配置时请把 stdout 的块手工粘贴进去',
       '说明: keytool 自检会把明文口令作为本地 keytool 的参数传入；没有 JDK / 不想自检时加 --no-keytool',
@@ -351,16 +400,415 @@ function verifyPasswordPair(storeFile, storePassword, keyPassword, alias) {
 
 // ------------------------------------------------------------------ 路径与 material
 
-/** 解析并校验一个必须是普通文件的输入 */
-function resolveExistingFile(value, label, help) {
+/** 错误信息里只给证书来源的简短描述，避免把整段 PEM / BASE64 回显 */
+function describeSource(value) {
+  if (value.includes('-----BEGIN') || value.length > 120) {
+    return `(已省略，共 ${value.length} 字符)`
+  }
+  return value
+}
+
+function certificatePemFromText(value) {
+  const blocks = [
+    ...normalizePemText(value).matchAll(
+      /-----BEGIN CERTIFICATE-----[\s\S]*?-----END CERTIFICATE-----/g,
+    ),
+  ].map((match) => match[0])
+  if (blocks.length === 0) {
+    return null
+  }
+  const pem = `${blocks.join('\n')}\n`
+  try {
+    return { certificate: new X509Certificate(pem), pem }
+  } catch {
+    return null
+  }
+}
+
+/**
+ * 从选项 / 环境变量的值里解析证书内容。
+ *
+ * 支持：
+ *   - PEM 文本（真实换行，或 `\n` 转义）
+ *   - BASE64：DER 证书，或 BASE64 后再包一层 PEM
+ * 不是证书内容时返回 null，由调用方按路径处理。
+ */
+function certificateFromValue(value) {
+  const text = value.trim()
+  if (text.includes('-----BEGIN CERTIFICATE-----')) {
+    return certificatePemFromText(value)
+  }
+  const compact = value.replace(/\s+/g, '')
+  if (compact === '' || !/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
+    return null
+  }
+  try {
+    const base64 = compact.replace(/-/g, '+').replace(/_/g, '/')
+    const decoded = Buffer.from(base64, 'base64')
+    const decodedText = decoded.toString('utf8')
+    if (decodedText.includes('-----BEGIN CERTIFICATE-----')) {
+      return certificatePemFromText(decodedText)
+    }
+    const certificate = new X509Certificate(decoded)
+    return { certificate, pem: `${certificate.toString().trim()}\n` }
+  } catch {
+    return null
+  }
+}
+
+/** 读取证书文件，并转成统一的 PEM 文本 */
+function readCertificateFile(file, help) {
+  let buffer
+  try {
+    buffer = fs.readFileSync(file)
+  } catch (error) {
+    throw new UsageError(`读取证书失败: ${file}: ${error.message}`, help)
+  }
+  try {
+    const certificate = new X509Certificate(buffer)
+    return { certificate, pem: `${certificate.toString().trim()}\n` }
+  } catch (error) {
+    throw new UsageError(`证书解析失败: ${file}: ${error.message}`, help)
+  }
+}
+
+/** 把证书写到 outPath；已存在相同证书则复用，不同则先备份再覆盖 */
+function writeCertificateFile(outPath, source, help) {
+  const absolute = path.resolve(outPath)
+  if (fs.existsSync(absolute)) {
+    if (!fs.statSync(absolute).isFile()) {
+      throw new UsageError(`证书输出路径不是普通文件: ${outPath}`, help)
+    }
+    let existing
+    try {
+      existing = new X509Certificate(fs.readFileSync(absolute))
+    } catch {
+      existing = null
+    }
+    if (existing !== null && existing.fingerprint256 === source.certificate.fingerprint256) {
+      return { path: absolute, reused: true }
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const backup = `${absolute}.bak-${stamp}`
+    fs.copyFileSync(absolute, backup)
+    stderr(`警告: 已有证书不同或无法解析，已备份到 ${backup}`)
+  }
+  fs.mkdirSync(path.dirname(absolute), { recursive: true })
+  fs.writeFileSync(absolute, source.pem, { mode: 0o644 })
+  return { path: absolute, reused: false }
+}
+
+/**
+ * 解析证书来源并返回最终写进 build-profile.json5 的 certpath。
+ *
+ * value 是路径时直接用（给了 outValue 则复制到 outValue）；
+ * value 是 PEM / BASE64 时写到 outValue，未给时写到 .p12 同级的 certpath.cer。
+ */
+function resolveCertificate(value, outValue, storeFile, help) {
   const absolute = path.resolve(value)
-  if (!fs.existsSync(absolute)) {
-    throw new UsageError(`${label}不存在: ${value}`, help)
+  if (fs.existsSync(absolute)) {
+    if (!fs.statSync(absolute).isFile()) {
+      throw new UsageError(`证书路径不是普通文件: ${value}`, help)
+    }
+    const source = readCertificateFile(absolute, help)
+    if (outValue === undefined) {
+      return absolute
+    }
+    const written = writeCertificateFile(outValue, source, help)
+    stderr(`证书已写入: ${written.path}${written.reused ? '（与现有证书相同，复用）' : ''}`)
+    return written.path
   }
-  if (!fs.statSync(absolute).isFile()) {
-    throw new UsageError(`${label}不是普通文件: ${value}`, help)
+
+  const source = certificateFromValue(value)
+  if (source === null) {
+    throw new UsageError(
+      `证书文件不存在，内容也不是合法的 PEM / BASE64 证书: ${describeSource(value)}`,
+      help,
+    )
   }
-  return absolute
+  const target = outValue ?? path.join(path.dirname(storeFile), 'certpath.cer')
+  const written = writeCertificateFile(target, source, help)
+  stderr(`证书内容已写入: ${written.path}${written.reused ? '（与现有证书相同，复用）' : ''}`)
+  return written.path
+}
+
+/**
+ * 按顺序尝试多个证书来源（环境变量别名可能同时存在）。
+ *
+ * 命令行 --certpath 只尝试它自己（显式输错应当报错，而不是悄悄改用环境变量）；
+ * 环境变量层按 HARMONY_CERTPATH → HARMONY_CERT → HARMONY_CERTPATH_BASE64 → HARMONY_CERT_BASE64
+ * 依次尝试，前一个不是合法路径 / 内容时再试下一个。
+ */
+function resolveCertificateCandidates(values, outValue, storeFile, help) {
+  let lastError
+  for (const value of values) {
+    try {
+      return resolveCertificate(value, outValue, storeFile, help)
+    } catch (error) {
+      if (!(error instanceof UsageError)) {
+        throw error
+      }
+      lastError = error
+    }
+  }
+  throw lastError ?? new UsageError('证书来源为空', help)
+}
+
+/**
+ * 判断 BASE64 解出来的字节像不像 PKCS#12。
+ *
+ * PFX ::= SEQUENCE { version INTEGER (3), ... }，所以内容开头必须是 `02 01 03`；
+ * 证书也是 DER SEQUENCE（0x30），只看首字节会把 .cer 误当成 .p12。
+ */
+function looksLikePkcs12(buffer) {
+  if (buffer.length < 4 || buffer[0] !== 0x30) {
+    return false
+  }
+  let offset = 1
+  const firstLength = buffer[offset]
+  offset += 1
+  if ((firstLength & 0x80) !== 0) {
+    const byteCount = firstLength & 0x7f
+    if (byteCount === 0 || byteCount > 4 || offset + byteCount > buffer.length) {
+      return false
+    }
+    offset += byteCount
+  }
+  return (
+    offset + 3 <= buffer.length &&
+    buffer[offset] === 0x02 &&
+    buffer[offset + 1] === 0x01 &&
+    buffer[offset + 2] === 0x03
+  )
+}
+
+/** 从选项 / 环境变量值解析 BASE64 的 PKCS#12；不是 BASE64 或不是 PKCS#12 返回 null */
+function base64StoreFileFromValue(value) {
+  const compact = value.replace(/\s+/g, '')
+  if (compact === '' || !/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
+    return null
+  }
+  try {
+    const base64 = compact.replace(/-/g, '+').replace(/_/g, '/')
+    const buffer = Buffer.from(base64, 'base64')
+    return looksLikePkcs12(buffer) ? buffer : null
+  } catch {
+    return null
+  }
+}
+
+/** 把 p12 写到 outPath；已存在且字节相同则复用，不同则先备份再覆盖 */
+function writeStoreFile(outPath, buffer, help) {
+  const absolute = path.resolve(outPath)
+  if (fs.existsSync(absolute)) {
+    if (!fs.statSync(absolute).isFile()) {
+      throw new UsageError(`storeFile 输出路径不是普通文件: ${outPath}`, help)
+    }
+    const existing = fs.readFileSync(absolute)
+    if (existing.equals(buffer)) {
+      return { path: absolute, reused: true }
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const backup = `${absolute}.bak-${stamp}`
+    fs.copyFileSync(absolute, backup)
+    stderr(`警告: 已有 storeFile 不同，已备份到 ${backup}`)
+  }
+  fs.mkdirSync(path.dirname(absolute), { recursive: true })
+  fs.writeFileSync(absolute, buffer, { mode: 0o600 })
+  return { path: absolute, reused: false }
+}
+
+/**
+ * 解析 .p12 来源并返回最终写进 build-profile.json5 的 storeFile。
+ *
+ * value 是路径时直接用（给了 outValue 则复制到 outValue）；
+ * value 是 BASE64 时写到 outValue，未给时写到当前目录的 storeFile.p12。
+ */
+function resolveStoreFile(value, outValue, help) {
+  const absolute = path.resolve(value)
+  if (fs.existsSync(absolute)) {
+    if (!fs.statSync(absolute).isFile()) {
+      throw new UsageError(`storeFile 路径不是普通文件: ${value}`, help)
+    }
+    const buffer = fs.readFileSync(absolute)
+    if (outValue === undefined) {
+      return absolute
+    }
+    const written = writeStoreFile(outValue, buffer, help)
+    stderr(`storeFile 已写入: ${written.path}${written.reused ? '（与现有文件相同，复用）' : ''}`)
+    return written.path
+  }
+
+  const buffer = base64StoreFileFromValue(value)
+  if (buffer === null) {
+    throw new UsageError(
+      `storeFile 文件不存在，内容也不是合法的 BASE64 PKCS#12: ${describeSource(value)}`,
+      help,
+    )
+  }
+  const target = outValue ?? path.resolve('storeFile.p12')
+  const written = writeStoreFile(target, buffer, help)
+  stderr(`storeFile 内容已写入: ${written.path}${written.reused ? '（与现有文件相同，复用）' : ''}`)
+  return written.path
+}
+
+/** 按顺序尝试多个 .p12 来源；命令行 --store-file 只尝试它自己 */
+function resolveStoreFileCandidates(values, outValue, help) {
+  let lastError
+  for (const value of values) {
+    try {
+      return resolveStoreFile(value, outValue, help)
+    } catch (error) {
+      if (!(error instanceof UsageError)) {
+        throw error
+      }
+      lastError = error
+    }
+  }
+  throw lastError ?? new UsageError('.p12 来源为空', help)
+}
+
+/** SignedData OID：1.2.840.113549.1.7.2 */
+const SIGNED_DATA_OID = Buffer.from('06092a864886f70d010702', 'hex')
+
+/** 取 DER SEQUENCE 的内容起点；不是 SEQUENCE 返回 -1 */
+function derSequenceContentOffset(buffer) {
+  if (buffer.length < 2 || buffer[0] !== 0x30) {
+    return -1
+  }
+  let offset = 1
+  const firstLength = buffer[offset]
+  offset += 1
+  if ((firstLength & 0x80) !== 0) {
+    const byteCount = firstLength & 0x7f
+    if (byteCount === 0 || byteCount > 4 || offset + byteCount > buffer.length) {
+      return -1
+    }
+    offset += byteCount
+  }
+  return offset
+}
+
+/** 判断 DER 是不是 PKCS#7 SignedData（P7B） */
+function looksLikePkcs7(buffer) {
+  const offset = derSequenceContentOffset(buffer)
+  return (
+    offset >= 0 &&
+    offset + SIGNED_DATA_OID.length <= buffer.length &&
+    buffer.subarray(offset, offset + SIGNED_DATA_OID.length).equals(SIGNED_DATA_OID)
+  )
+}
+
+/** 从 PEM PKCS#7 文本里取出 DER；不是 SignedData 返回 null */
+function profileDerFromPemText(text) {
+  const match =
+    /-----BEGIN (?:PKCS7|PKCS #7 SIGNED DATA)-----([\s\S]*?)-----END (?:PKCS7|PKCS #7 SIGNED DATA)-----/.exec(
+      text,
+    )
+  if (match === null) {
+    return null
+  }
+  const der = Buffer.from(match[1].replace(/\s+/g, ''), 'base64')
+  return looksLikePkcs7(der) ? der : null
+}
+
+/** 从选项 / 环境变量值解析 BASE64（DER 或 PEM）的 P7B；不是 p7b 返回 null */
+function profileDerFromValue(value) {
+  const text = value.trim()
+  if (
+    text.includes('-----BEGIN PKCS7-----') ||
+    text.includes('-----BEGIN PKCS #7 SIGNED DATA-----')
+  ) {
+    return profileDerFromPemText(text)
+  }
+  const compact = value.replace(/\s+/g, '')
+  if (compact === '' || !/^[A-Za-z0-9+/=_-]+$/.test(compact)) {
+    return null
+  }
+  try {
+    const der = Buffer.from(compact.replace(/-/g, '+').replace(/_/g, '/'), 'base64')
+    const decodedText = der.toString('utf8')
+    if (
+      decodedText.includes('-----BEGIN PKCS7-----') ||
+      decodedText.includes('-----BEGIN PKCS #7 SIGNED DATA-----')
+    ) {
+      return profileDerFromPemText(decodedText)
+    }
+    return looksLikePkcs7(der) ? der : null
+  } catch {
+    return null
+  }
+}
+
+/** 把 profile 写到 outPath；已存在且字节相同则复用，不同则先备份再覆盖 */
+function writeProfileFile(outPath, buffer, help) {
+  const absolute = path.resolve(outPath)
+  if (fs.existsSync(absolute)) {
+    if (!fs.statSync(absolute).isFile()) {
+      throw new UsageError(`profile 输出路径不是普通文件: ${outPath}`, help)
+    }
+    const existing = fs.readFileSync(absolute)
+    if (existing.equals(buffer)) {
+      return { path: absolute, reused: true }
+    }
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const backup = `${absolute}.bak-${stamp}`
+    fs.copyFileSync(absolute, backup)
+    stderr(`警告: 已有 profile 不同，已备份到 ${backup}`)
+  }
+  fs.mkdirSync(path.dirname(absolute), { recursive: true })
+  fs.writeFileSync(absolute, buffer, { mode: 0o644 })
+  return { path: absolute, reused: false }
+}
+
+/**
+ * 解析 .p7b 来源并返回最终写进 build-profile.json5 的 profile。
+ *
+ * value 是路径时直接用（给了 outValue 则复制到 outValue）；
+ * value 是 BASE64 / PEM 内容时写到 outValue，未给时写到 .p12 同级的 profile.p7b。
+ */
+function resolveProfile(value, outValue, storeFile, help) {
+  const absolute = path.resolve(value)
+  if (fs.existsSync(absolute)) {
+    if (!fs.statSync(absolute).isFile()) {
+      throw new UsageError(`profile 路径不是普通文件: ${value}`, help)
+    }
+    const buffer = fs.readFileSync(absolute)
+    if (outValue === undefined) {
+      return absolute
+    }
+    const written = writeProfileFile(outValue, buffer, help)
+    stderr(`profile 已写入: ${written.path}${written.reused ? '（与现有文件相同，复用）' : ''}`)
+    return written.path
+  }
+
+  const der = profileDerFromValue(value)
+  if (der === null) {
+    throw new UsageError(
+      `profile 文件不存在，内容也不是合法的 BASE64 PKCS#7: ${describeSource(value)}`,
+      help,
+    )
+  }
+  const target = outValue ?? path.join(path.dirname(storeFile), 'profile.p7b')
+  const written = writeProfileFile(target, der, help)
+  stderr(`profile 内容已写入: ${written.path}${written.reused ? '（与现有文件相同，复用）' : ''}`)
+  return written.path
+}
+
+/** 按顺序尝试多个 .p7b 来源；命令行 --profile 只尝试它自己 */
+function resolveProfileCandidates(values, outValue, storeFile, help) {
+  let lastError
+  for (const value of values) {
+    try {
+      return resolveProfile(value, outValue, storeFile, help)
+    } catch (error) {
+      if (!(error instanceof UsageError)) {
+        throw error
+      }
+      lastError = error
+    }
+  }
+  throw lastError ?? new UsageError('.p7b 来源为空', help)
 }
 
 /** 备份已有 material 目录，避免 --new-material 直接把旧钥匙覆盖掉 */
@@ -621,20 +1069,41 @@ export async function runHuaweiSigningConfig(argv, env) {
     SIGNING_FLAGS,
   )
 
-  const storeFileValue = options.get(OPTION_STORE_FILE) ?? readEnv(env, ENV_STORE_FILE)
-  const certPathValue = options.get(OPTION_CERTPATH) ?? readEnv(env, ENV_CERTPATH)
-  const profileValue = options.get(OPTION_PROFILE) ?? readEnv(env, ENV_PROFILE)
+  const storeOptionValue = options.get(OPTION_STORE_FILE)
+  const storeEnvValues = [
+    readEnv(env, ENV_STORE_FILE),
+    readEnv(env, ENV_STORE_FILE_BASE64),
+  ].filter((value) => value !== undefined)
+  const storeValues = storeOptionValue === undefined ? storeEnvValues : [storeOptionValue]
+  const certOptionValue = options.get(OPTION_CERTPATH)
+  const certEnvValues = [
+    readEnv(env, ENV_CERTPATH),
+    readEnv(env, ENV_CERT),
+    readEnv(env, ENV_CERTPATH_BASE64),
+    readEnv(env, ENV_CERT_BASE64),
+  ].filter((value) => value !== undefined)
+  const certValues = certOptionValue === undefined ? certEnvValues : [certOptionValue]
+  const profileOptionValue = options.get(OPTION_PROFILE)
+  const profileEnvValues = [
+    readEnv(env, ENV_PROFILE),
+    readEnv(env, ENV_PROFILE_BASE64),
+  ].filter((value) => value !== undefined)
+  const profileValues = profileOptionValue === undefined ? profileEnvValues : [profileOptionValue]
   const missing = []
-  if (storeFileValue === undefined) missing.push(`${OPTION_STORE_FILE}（.p12）`)
-  if (certPathValue === undefined) missing.push(`${OPTION_CERTPATH}（.cer）`)
-  if (profileValue === undefined) missing.push(`${OPTION_PROFILE}（.p7b）`)
+  if (storeValues.length === 0) missing.push(`${OPTION_STORE_FILE}（.p12 / BASE64）`)
+  if (certValues.length === 0) missing.push(`${OPTION_CERTPATH}（.cer / PEM / BASE64）`)
+  if (profileValues.length === 0) missing.push(`${OPTION_PROFILE}（.p7b / BASE64）`)
   if (missing.length > 0) {
     throw new UsageError(`缺少必填参数: ${missing.join('；')}`, renderSigningConfigHelp())
   }
 
-  const storeFile = resolveExistingFile(storeFileValue, '.p12', renderSigningConfigHelp)
-  const certpath = resolveExistingFile(certPathValue, '.cer', renderSigningConfigHelp)
-  const profile = resolveExistingFile(profileValue, '.p7b', renderSigningConfigHelp)
+  const storeFileOutValue =
+    options.get(OPTION_STORE_FILE_OUT) ?? readEnv(env, ENV_STORE_FILE_OUT)
+  const storeFile = resolveStoreFileCandidates(
+    storeValues,
+    storeFileOutValue,
+    renderSigningConfigHelp,
+  )
   const signAlg =
     options.get(OPTION_SIGN_ALG) ?? readEnv(env, ENV_SIGN_ALG) ?? DEFAULT_SIGN_ALG
 
@@ -708,6 +1177,22 @@ export async function runHuaweiSigningConfig(argv, env) {
   if (!keyAlias) {
     throw new UsageError('密钥别名不能为空', renderSigningConfigHelp())
   }
+
+  const certOutValue = options.get(OPTION_CERTPATH_OUT) ?? readEnv(env, ENV_CERTPATH_OUT)
+  const certpath = resolveCertificateCandidates(
+    certValues,
+    certOutValue,
+    storeFile,
+    renderSigningConfigHelp,
+  )
+
+  const profileOutValue = options.get(OPTION_PROFILE_OUT) ?? readEnv(env, ENV_PROFILE_OUT)
+  const profile = resolveProfileCandidates(
+    profileValues,
+    profileOutValue,
+    storeFile,
+    renderSigningConfigHelp,
+  )
 
   const materialDir = path.join(path.dirname(storeFile), 'material')
   const { workKey, note } = prepareMaterial(
