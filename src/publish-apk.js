@@ -49,6 +49,7 @@ import { aabCommand, apkCommand } from './apk.js'
 import { appCommand, hapCommand } from './hap.js'
 import { googleCommand } from './google.js'
 import { huaweiCommand } from './huawei.js'
+import { keystoreCommand } from './keystore.js'
 import { profileCommand } from './profile.js'
 
 /**
@@ -64,7 +65,15 @@ const VENDORS = [huaweiCommand, googleCommand]
  * 与厂商无关的工具命令表：形状与厂商命令相同，但只操作本地文件与通用密码学数据，
  * 不属于任何应用市场。新增工具（如证书、签名校验）在这里注册。
  */
-const TOOLS = [certCommand, profileCommand, hapCommand, appCommand, apkCommand, aabCommand]
+const TOOLS = [
+  certCommand,
+  profileCommand,
+  hapCommand,
+  appCommand,
+  apkCommand,
+  aabCommand,
+  keystoreCommand,
+]
 
 /** 根命令总表：厂商命令 + 工具命令；根帮助与命令分发都以它为准 */
 const COMMANDS = [...VENDORS, ...TOOLS]
@@ -113,6 +122,7 @@ function renderRootHelp() {
       `  ${PROGRAM} <厂商>                 查看该厂商的子命令`,
       `  ${PROGRAM} <厂商> <命令> --help   查看该命令的帮助文档`,
       `  ${PROGRAM} cert --file <文件>      查看证书 / PKCS#12 密钥库信息`,
+      `  ${PROGRAM} keystore --file <文件>  校验 Android 签名密钥库（口令 / 别名）`,
       `  ${PROGRAM} profile --file <文件>   查看 P7B Provisioning Profile`,
       `  ${PROGRAM} hap --file <文件>       查看 HAP 安装包信息`,
       `  ${PROGRAM} app --file <文件>       查看 APP 安装包信息`,

@@ -12,7 +12,10 @@
     "apk",
     "aab",
     "publish",
-    "cli"
+    "cli",
+    "keystore",
+    "signing",
+    "jks"
   ],
   "repository": {
     "type": "git",

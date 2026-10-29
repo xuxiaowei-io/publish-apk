@@ -2,13 +2,16 @@
 
 发布 APP 的命令行工具：为应用市场**获取鉴权令牌**、**上传安装包**并**登记软件包 / 发布版本**，供上传/发布流水线使用。
 当前支持华为应用市场（AppGallery Connect / AGC Connect API）与 Google Play（Android Publisher API v3）。
-另提供一个与厂商无关的 `cert` 命令（证书 / PKCS#12 密钥库）与 `profile` 命令（P7B Provisioning Profile）。
+另提供一个与厂商无关的 `cert` 命令（证书 / PKCS#12 密钥库）、`profile` 命令（P7B Provisioning Profile）
+与 `keystore` 命令（校验 Android 签名密钥库的口令 / 别名，BASE64 可落盘）。
 华为侧另有 `huawei signing-config`，用 `.cer` / `.p7b` / `.p12` 与明文口令生成 `build-profile.json5` 的签名配置。
 
-- 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`）
+- 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`，
+  校验 Android keystore 时调用 JDK `keytool`）
 - `stdout` 只写结果、`stderr` 只写日志与错误，便于 `TOKEN=$(publish-apk …)` 与管道取用
 - 厂商隔离：根命令不认识任何厂商，华为相关实现全部在 [src/huawei.js](src/huawei.js)，Google Play 相关实现全部在 [src/google.js](src/google.js)；
-  与厂商无关的证书 / 密钥库查看在 [src/cert.js](src/cert.js)，P7B profile 查看在 [src/profile.js](src/profile.js)
+  与厂商无关的证书 / 密钥库查看在 [src/cert.js](src/cert.js)，P7B profile 查看在 [src/profile.js](src/profile.js)，
+  Android keystore 校验在 [src/keystore.js](src/keystore.js)
 
 > 状态：`0.0.1-alpha.x` 早期版本，参数与输出可能调整，请以 `--help` 为准。
 
@@ -31,6 +34,7 @@
 
 - Node.js **>= 18**（使用内置 `fetch` 与 `AbortSignal.timeout`）
 - 查看 PKCS#12（如 `storeFile.p12`）需要系统 `openssl` 命令（OpenSSL 1.1.1+ / LibreSSL）；其它功能只依赖 Node 内置模块
+- `keystore` 校验 Android 签名密钥库需要 JDK 的 `keytool`（`KEYTOOL=/path/to/keytool` 可指定）
 - `huawei signing-config` 的 keytool 自检是可选的：没有 JDK / keytool 时用 `--key-alias` 指定别名即可
 
 ## 安装
@@ -56,6 +60,8 @@ publish-apk                       # 根帮助
 publish-apk -v                    # 版本号
 publish-apk cert --file ./certpath.cer                    # 查看证书
 publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 密钥库
+publish-apk keystore --file ./release.p12 --store-password <口令> --key-alias release  # 校验 Android 签名密钥库
+ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore  # 校验 CI 变量
 publish-apk profile --file ./profile.p7b                  # 查看 P7B Provisioning Profile
 publish-apk hap --file ./app-signed.hap                    # 查看 HAP 安装包信息
 publish-apk hap --file ./*.hap                             # 一次查看多个 HAP
@@ -71,9 +77,9 @@ publish-apk google                # google 子命令帮助
 publish-apk google <命令> --help   # 某个子命令的帮助文档
 ```
 
-### 为什么会有查看证书 / profile / HAP / APP / APK / AAB 的命令？
+### 为什么会有查看证书 / profile / keystore / HAP / APP / APK / AAB 的命令？
 
-本项目的主流程是把手机 APP 上传到应用商店；`cert` / `profile` 是**签名材料的本地核对工具**，`hap` / `app` / `apk` / `aab` 是**安装包的本地核对工具**，都不是上传流程中的一步。
+本项目的主流程是把手机 APP 上传到应用商店；`cert` / `profile` / `keystore` 是**签名材料的本地核对工具**，`hap` / `app` / `apk` / `aab` 是**安装包的本地核对工具**，都不是上传流程中的一步。
 
 华为鸿蒙 APP 在打包 / 签名时需要 `.cer`、`.p12`、`.p7b` 三类文件。同一开发者账号下往往有多套证书与 Profile，文件名、别名、Bundle、有效期、设备范围都很接近，容易拿错；`cert` / `profile` 把关键字段逐行列出，**主要用于区分多个鸿蒙证书 / Profile，确认当前签名配置用的是哪一份**。`hap` / `app` / `apk` / `aab` 则用于核对构建产物本身，尤其是区分同名的 `signed.*` 与 `unsigned.*`：
 
@@ -86,6 +92,10 @@ publish-apk google <命令> --help   # 某个子命令的帮助文档
 | `.app` | 鸿蒙 App Pack（外层包信息、内层 HAP / HSP、签名状态） | `publish-apk app --file ./app-signed.app` |
 | `.apk` | Android 安装包（包名、SDK、ABI、权限、签名证书） | `publish-apk apk --file ./app-arm64-v8a-release.apk` |
 | `.aab` | Android App Bundle（包名、SDK、模块、ABI、签名证书） | `publish-apk aab --file ./app-release.aab` |
+
+Android 的签名密钥库（`.jks` / `.keystore` / `.p12`）用 `keystore` 校验：它不仅看证书，还会用
+`keytool` 确认 keystore 口令、别名与私钥口令是否配套，并支持把 `ANDROID_KEYSTORE_BASE64` 解码后
+写到 `ANDROID_KEYSTORE_FILE`。详见下面的 `keystore` 小节。
 
 查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文，`hap` / `app` / `apk` / `aab` 只读包内信息与签名块头；这些命令只读取本地文件，不会访问应用商店。
 
@@ -135,6 +145,47 @@ PROFILE_VERBOSE=1 publish-apk profile --file ./profile.p7b
   （设备 UDID、权限、ACL、服务能力等逐项一行）、签名证书链与开发 / 发布证书的完整字段。
 - 支持 DER 与 PEM 包裹的 PKCS#7；不输出证书 PEM 原文，P7B 里没有私钥。
 - 内嵌数据不是 JSON（例如纯证书 P7B）时仍会统计签名证书，并在 `--verbose` 里输出完整证书链与原因。
+
+### keystore（校验 Android 签名密钥库）
+
+与厂商无关的本地工具：把 CI 里那套 Android 签名变量先校验一遍，避免等到 Gradle 的
+`packageRelease` 才报 `KeytoolException`（那时既晚，又看不出是哪个变量错了）。校验用 JDK 的
+`keytool`，依次确认三件事：
+
+1. `keytool -list` 能打开密钥库 —— `ANDROID_KEYSTORE_PASSWORD` 正确；
+2. 别名存在 —— `ANDROID_KEY_ALIAS` 正确（不传时自动识别第一个 `PrivateKeyEntry`）；
+3. `keytool -certreq` 能用 `ANDROID_KEY_PASSWORD` 解开私钥 —— 默认与 keystore 口令相同。
+
+输入有两种，可组合：
+
+- `--base64` / `ANDROID_KEYSTORE_BASE64`：密钥库的 BASE64 内容。此时再给
+  `--file` / `ANDROID_KEYSTORE_FILE`，校验通过后会把解码出来的**密钥库原文**写到该路径；
+  不给文件路径就落到临时文件校验，结束后删除，不留下任何东西。
+- `--file` / `ANDROID_KEYSTORE_FILE` / `ANDROID_KEYSTORE`：已有的密钥库文件路径。
+
+```bash
+# 已有文件：文件 + 口令 + 别名
+publish-apk keystore --file ./release.p12 --store-password <口令> --key-alias release
+
+# CI 变量原样使用：BASE64 + 口令 + 别名，并把密钥库落盘到 ANDROID_KEYSTORE_FILE
+ANDROID_KEYSTORE_BASE64="$(openssl base64 -A -in release.p12)" \
+ANDROID_KEYSTORE_PASSWORD=<口令> ANDROID_KEY_ALIAS=release \
+ANDROID_KEYSTORE_FILE=./release.p12 \
+publish-apk keystore
+
+# 只校验 BASE64，不落盘（临时文件校验后删除）
+ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore
+```
+
+- `--file` 与 BASE64 同用时是**输出**路径；单独使用时是**输入**路径。
+- stdout 输出：密钥库路径、大小、SHA-256 前 12 位、类型、别名、公钥、证书主题 / 颁发者 / 序列号 /
+  有效期 / MD5、SHA-256 指纹，最后一行是「校验: 通过」。每行一条「标签: 值」。
+- 落盘时权限固定 `0600`；已存在相同内容则复用，不同内容会先备份为 `<文件>.bak-<时间戳>` 再覆盖。
+- 口令不会打印到 stdout / stderr；但 `keytool` 只接受 `-storepass` / `-keypass` 参数形式，
+  校验期间会出现在本地 keytool 进程的 argv 里（与 `huawei signing-config` 的口令自检一致）。
+- `--store-password` / `--key-password` 会进入 shell 历史与 `ps`，建议用
+  `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_PASSWORD`；非交互环境没有给口令时直接报错。
+- 校验失败（口令错、别名不存在、私钥口令错、`keytool` 不可用）以退出代码 `1` 结束，不会写输出文件。
 
 ### hap（查看 HAP 安装包信息）
 
@@ -621,6 +672,31 @@ publish-apk google upload-aab --package-name com.example.app --file ./app-releas
 | `AAB_FILE` | `--file` | AAB 文件路径；**必填**，没有默认文件 |
 | `AAB_VERBOSE` | `--verbose` | 输出全部字段：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 
+### Android keystore（`ANDROID_*`）
+
+| 环境变量 | 等价选项 | 说明 |
+| --- | --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | `--base64` | 密钥库的 BASE64 内容；与文件路径同用时先解码落盘 |
+| `ANDROID_KEYSTORE_FILE` | `--file` | 密钥库路径；与 BASE64 同用时是输出路径，单独用时是输入文件 |
+| `ANDROID_KEYSTORE` | `--file` | `ANDROID_KEYSTORE_FILE` 的别名，只当文件路径用 |
+| `ANDROID_KEYSTORE_PASSWORD` | `--store-password` | keystore 明文口令；建议用环境变量，避免进入 `ps` / shell 历史 |
+| `ANDROID_KEY_ALIAS` | `--key-alias` | 私钥别名；不传时用 `keytool -list` 自动识别 |
+| `ANDROID_KEY_PASSWORD` | `--key-password` | 私钥明文口令；不传时用 keystore 口令 |
+| `KEYTOOL` | —（仅环境变量） | `keytool` 可执行文件，默认 PATH 上的 `keytool` |
+
+```bash
+# 已有 keystore 文件
+ANDROID_KEYSTORE_FILE=./release.p12 \
+ANDROID_KEYSTORE_PASSWORD=<口令> ANDROID_KEY_ALIAS=release \
+publish-apk keystore
+
+# BASE64 + 输出文件：先落盘再校验
+ANDROID_KEYSTORE_BASE64="$(openssl base64 -A -in release.p12)" \
+ANDROID_KEYSTORE_FILE=./release.p12 \
+ANDROID_KEYSTORE_PASSWORD=<口令> ANDROID_KEY_ALIAS=release \
+publish-apk keystore
+```
+
 ### 华为（`HUAWEI_*`）
 
 
@@ -739,10 +815,11 @@ publish-apk google upload-aab
 
 ## 输出与退出代码约定
 
-- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书、PKCS#12 与 P7B profile 信息 / `signingConfig` JSON），可直接被 `$(…)` 与 `jq` 取用。
+- `stdout`：只写结果（JWT / `access_token` / 接口原始响应 JSON / `objectId` / `versionCode` / 证书、PKCS#12、P7B profile 与 Android keystore 信息 / `signingConfig` JSON），可直接被 `$(…)` 与 `jq` 取用。
 - `stderr`：错误信息与 `--verbose` / `HUAWEI_VERBOSE` / `GOOGLE_VERBOSE` 的运行日志；日志中 **Token、`client_id`、私钥路径、服务账号路径只显示掩码**，私钥与服务账号 JSON 数据永不写入日志（`--file` 的本地路径按原样打印，它不是凭证，出错时正是靠它定位）。
 - `cert` 的 `--verbose` / `CERT_VERBOSE` 是「输出全部证书 / 密钥库字段」而不是运行日志，信息统一写 `stdout`；PKCS#12 的私钥内容不会被输出。
 - `profile` 的 `--verbose` / `PROFILE_VERBOSE` 输出全部 profile JSON 字段与证书字段，信息同样写 `stdout`。
+- `keystore` 的 `stdout` 是校验结果（密钥库 / 大小 / 类型 / 别名 / 公钥 / 证书 / 校验结论），落盘与备份路径写 `stderr`；口令不会打印。
 - `huawei signing-config` 的 `stdout` 是 `signingConfig` JSON（含密文口令），material 路径、keytool 自检结果与 `--write` 备份路径写 `stderr`；明文口令不会打印。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
@@ -757,6 +834,10 @@ make h                                           # 根帮助
 make cert CERT_FILE=./certpath.cer               # 查看证书
 CERT_PASSWORD=<密码> make cert CERT_FILE=./storeFile.p12  # 查看 PKCS#12（密码只走环境变量）
 make cert-help                                   # cert 命令帮助
+make keystore ANDROID_KEYSTORE_FILE=./release.p12 ANDROID_KEY_ALIAS=release  # 校验 Android keystore（口令走环境变量）
+ANDROID_KEYSTORE_BASE64="$(openssl base64 -A -in release.p12)" \
+  ANDROID_KEYSTORE_PASSWORD=<口令> make keystore ANDROID_KEYSTORE_FILE=./release.p12
+make keystore-help                               # keystore 命令帮助
 make profile PROFILE_FILE=./profile.p7b          # 查看 P7B Provisioning Profile
 make profile-help                                # profile 命令帮助
 make hap HAP_FILE=./app-signed.hap               # 查看 HAP 安装包信息
@@ -786,7 +867,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -801,6 +882,11 @@ make pack-check                                  # 查看 npm 发布物内容（
 
 - `openssl-pkcs12`（`cert` 命令查看 PKCS#12 时调用的系统命令）：
   <https://docs.openssl.org/master/man1/openssl-pkcs12/>
+
+### Java / keytool
+
+- `keytool`（`keystore` 命令校验 Android keystore、`huawei signing-config` 自检时调用的 JDK 工具）：
+  <https://docs.oracle.com/en/java/javase/21/docs/specs/man/keytool.html>
 
 ### PKCS#7 / CMS
 

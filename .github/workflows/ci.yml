@@ -46,6 +46,7 @@ jobs:
           node src/publish-apk.js app --help > /dev/null
           node src/publish-apk.js apk --help > /dev/null
           node src/publish-apk.js aab --help > /dev/null
+          node src/publish-apk.js keystore --help > /dev/null
           node src/publish-apk.js huawei --help > /dev/null
           node src/publish-apk.js huawei service-account --help > /dev/null
           node src/publish-apk.js huawei service-account-upload-url --help > /dev/null
@@ -281,3 +282,29 @@ jobs:
             --profile "$tmp/profile.p7b" --key-alias smoke --no-keytool \
             --config "$tmp/build-profile.json5" --name default --write > /dev/null
           grep -q '"keyAlias": "smoke"' "$tmp/build-profile.json5"
+
+          # keystore：用 keytool 生成 PKCS#12，校验口令 / 别名，并从 BASE64 落盘
+          if command -v keytool > /dev/null 2>&1; then
+            keytool -genkeypair -keystore "$tmp/release.p12" -storetype PKCS12 \
+              -storepass changeit -keypass changeit -alias release -keyalg RSA -keysize 2048 \
+              -dname 'CN=smoke.test' -validity 1 > /dev/null 2>&1
+            node src/publish-apk.js keystore --file "$tmp/release.p12" \
+              --store-password changeit --key-alias release > "$tmp/keystore.txt"
+            grep -q '^类型: PKCS12$' "$tmp/keystore.txt"
+            grep -q '^别名: release$' "$tmp/keystore.txt"
+            grep -qE '^证书 MD5: ([0-9A-F]{2}:){15}[0-9A-F]{2}$' "$tmp/keystore.txt"
+            grep -q '^校验: 通过' "$tmp/keystore.txt"
+
+            keystore_b64="$(openssl base64 -A -in "$tmp/release.p12")"
+            ANDROID_KEYSTORE_BASE64="$keystore_b64" ANDROID_KEYSTORE_PASSWORD=changeit \
+              node src/publish-apk.js keystore --file "$tmp/from-base64.p12" > /dev/null
+            cmp "$tmp/release.p12" "$tmp/from-base64.p12"
+
+            if node src/publish-apk.js keystore --file "$tmp/release.p12" \
+              --store-password wrong-password > /dev/null 2>&1; then
+              echo 'keystore 用错口令应当失败' >&2
+              exit 1
+            fi
+          else
+            echo '跳过 keystore smoke test：没有 keytool'
+          fi

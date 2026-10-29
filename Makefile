@@ -112,6 +112,17 @@ SHELL := /usr/bin/env bash
 #   3. make 命令行上给出的变量本来就会导出给子进程，所以 HUAWEI_VERBOSE / HUAWEI_API_BASE
 #      这类不需要转发的变量照样生效（--verbose 是开关，转成 `--verbose "0"` 反而无法表达「关闭」）。
 # 业务目标已用 @ 关闭命令回显，避免密钥打到日志里。
+#
+# Android keystore 校验可选变量（命令与 CI 读同名 ANDROID_* 环境变量）：
+#   ANDROID_KEYSTORE_BASE64   密钥库的 BASE64 内容，等价于 --base64
+#   ANDROID_KEYSTORE_FILE     密钥库路径，等价于 --file（ANDROID_KEYSTORE 也可）
+#   ANDROID_KEY_ALIAS         私钥别名，等价于 --key-alias
+#   ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_PASSWORD
+#                             明文口令；只走环境变量或交互输入，**不作选项转发**（密码不进命令行）
+#   ANDROID_KEYSTORE_ARGS     追加到 keystore 命令末尾的额外参数
+#
+#   与 --base64 / ANDROID_KEYSTORE_BASE64 同用时，ANDROID_KEYSTORE_FILE 是**输出**路径：
+#   校验通过后把解码出来的密钥库原文写进去；只给 BASE64 时用临时文件校验，不落盘。
 HUAWEI_KID ?=
 HUAWEI_ISS ?=
 HUAWEI_PRIVATE_KEY ?=
@@ -165,6 +176,12 @@ APK_ARGS ?=
 AAB_FILE ?=
 AAB_VERBOSE ?=
 AAB_ARGS ?=
+ANDROID_KEYSTORE_BASE64 ?=
+ANDROID_KEYSTORE_FILE ?=
+ANDROID_KEY_ALIAS ?=
+ANDROID_KEYSTORE_PASSWORD ?=
+ANDROID_KEY_PASSWORD ?=
+KEYSTORE_ARGS ?=
 HARMONY_STORE_FILE ?=
 HARMONY_STORE_FILE_OUT ?=
 HARMONY_CERTPATH ?=
@@ -228,6 +245,10 @@ APK_FILE_ARGS = $(call apkOption,APK_FILE,--file)
 # 组合 aab 的参数：AAB_FILE 只在 make 命令行给出时转成 --file
 AAB_FILE_ARGS = $(call aabOption,AAB_FILE,--file)
 
+# keystore 变量使用同一套转发规则；BASE64 与两个口令不转发（由命令读环境变量）
+keystoreOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+KEYSTORE_FILE_ARGS = $(call keystoreOption,ANDROID_KEYSTORE_FILE,--file) $(call keystoreOption,ANDROID_KEY_ALIAS,--key-alias)
+
 # 组合 huawei service-account 的参数：命令行给哪个变量就转哪个选项，都不给则完全回退环境变量
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
 HUAWEI_SERVICE_ACCOUNT_ARGS = $(call huaweiOption,HUAWEI_KID,--kid) $(call huaweiOption,HUAWEI_ISS,--iss) $(call huaweiOption,HUAWEI_PRIVATE_KEY,--private-key) $(call huaweiOption,HUAWEI_PRIVATE_KEY_DATA,--private-key-data) $(call huaweiOption,HUAWEI_IAT,--iat)
@@ -278,6 +299,7 @@ help: ## Show help information
 # Mark targets as phony (not actual files)
 .PHONY: help h \
 	cert-help cert \
+	keystore-help keystore \
 	profile-help profile \
 	huawei-help \
 	huawei-signing-config-help huawei-signing-config \
@@ -338,6 +360,14 @@ aab-help: ## 查看 AAB 安装包帮助文档
 
 aab: ## 查看 AAB 安装包信息（AAB_FILE 必填；AAB_VERBOSE 输出全部字段）
 	@node src/publish-apk.js aab $(AAB_FILE_ARGS) $(AAB_ARGS)
+
+# ------------------------------------------------------- Android keystore
+
+keystore-help: ## 校验 Android 签名密钥库帮助文档
+	node src/publish-apk.js keystore --help
+
+keystore: ## 校验 Android 签名密钥库（ANDROID_KEYSTORE_FILE / ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS；BASE64 + FILE 时先落盘）
+	@node src/publish-apk.js keystore $(KEYSTORE_FILE_ARGS) $(KEYSTORE_ARGS)
 
 # ------------------------------------------------------------------- 华为
 
