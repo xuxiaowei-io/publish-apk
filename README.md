@@ -336,6 +336,11 @@ HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-config \
   --config ./build-profile.json5 \
   --name default \
   --write
+
+# 同时查看 .p12 / .cer / .p7b 的材料信息（stderr）
+HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-config \
+  --store-file ./storeFile.p12 --certpath ./certpath.cer --profile ./profile.p7b \
+  --key-alias dev --verbose
 ```
 
 证书也可以不落成 `.cer` 文件，直接把内容或 BASE64 放进环境变量：
@@ -369,6 +374,7 @@ HARMONY_PROFILE_BASE64="$(openssl base64 -A -in profile.p7b)" \
 - `--store-file` / `HARMONY_STORE_FILE` / `HARMONY_STORE_FILE_BASE64` 除了 `.p12` 路径，也接受 **BASE64**；内容会写到 `--store-file-out`，未给时写到当前目录的 `storeFile.p12`；已有不同文件会先备份再覆盖。
 - `--certpath` / `HARMONY_CERTPATH` 除了 `.cer` 路径，也接受 **PEM 内容**或 **BASE64**（DER 或 PEM）；内容会写到 `--certpath-out`，未给时写到 `.p12` 同级的 `certpath.cer`；已有不同证书会先备份再覆盖。
 - `--profile` / `HARMONY_PROFILE` / `HARMONY_PROFILE_BASE64` 除了 `.p7b` 路径，也接受 **BASE64**；内容会写到 `--profile-out`，未给时写到 `.p12` 同级的 `profile.p7b`；已有不同 profile 会先备份再覆盖。
+- 默认在 `stderr` 输出 `.p12` / `.cer` / `.p7b` 的材料信息（复用 `cert` / `profile` 的字段）；`--verbose` / `HARMONY_VERBOSE=1` 输出全部字段。
 - `--key-alias` 不传时用 `keytool` 从 `.p12` 读取；keytool 还会用 `-certreq` 自检两个明文口令能否打开私钥。
 - 不给 `--write` 时只把 `signingConfig` JSON 写到 `stdout`，方便手工粘贴；`--write` 只更新同名 `signingConfig` 的 `material`，改前备份到 `build-profile.json5` 所在目录的 `.signing/backup/`。
 - 明文口令优先用 `HARMONY_STORE_PASSWORD` / `HARMONY_KEY_PASSWORD`，也可以交互输入；`--store-password` / `--key-password` 会进入 shell 历史，不推荐。
@@ -751,6 +757,7 @@ publish-apk huawei service-account-upload-url
 | `HARMONY_SIGN_ALG` | `--sign-alg` | 签名算法，默认 `SHA256withECDSA` |
 | `HARMONY_STORE_PASSWORD` | `--store-password` | `.p12` 明文口令；推荐用环境变量/交互输入；make 只把它作为环境变量传给子进程，不转成 `--store-password` |
 | `HARMONY_KEY_PASSWORD` | `--key-password` | 密钥明文口令；默认与 `HARMONY_STORE_PASSWORD` 相同 |
+| `HARMONY_VERBOSE` | `--verbose` | 输出 `.p12` / `.cer` / `.p7b` 全部字段；`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 | `HARMONY_CONFIG` | `--config` | `build-profile.json5` 路径，默认 `./build-profile.json5` |
 | `HARMONY_SIGNING_NAME` | `--name` | 要更新/输出的 signingConfig 名字，默认 `default` |
 | `HARMONY_PRODUCT` | `--product` | 按产品名找它挂的 signingConfig 作为名字 |
@@ -820,7 +827,7 @@ publish-apk google upload-aab
 - `cert` 的 `--verbose` / `CERT_VERBOSE` 是「输出全部证书 / 密钥库字段」而不是运行日志，信息统一写 `stdout`；PKCS#12 的私钥内容不会被输出。
 - `profile` 的 `--verbose` / `PROFILE_VERBOSE` 输出全部 profile JSON 字段与证书字段，信息同样写 `stdout`。
 - `keystore` 的 `stdout` 是校验结果（密钥库 / 大小 / 类型 / 别名 / 公钥 / 证书 / 校验结论），落盘与备份路径写 `stderr`；口令不会打印。
-- `huawei signing-config` 的 `stdout` 是 `signingConfig` JSON（含密文口令），material 路径、keytool 自检结果与 `--write` 备份路径写 `stderr`；明文口令不会打印。
+- `huawei signing-config` 的 `stdout` 是 `signingConfig` JSON（含密文口令），保持纯 JSON；`.p12` / `.cer` / `.p7b` 材料信息、material 路径、keytool 自检结果与 `--write` 备份路径都写 `stderr`；明文口令不会打印。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
 
@@ -867,7 +874,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 

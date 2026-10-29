@@ -101,6 +101,7 @@ SHELL := /usr/bin/env bash
 #                     等价于 --name / --product
 #   HARMONY_STORE_PASSWORD / HARMONY_KEY_PASSWORD
 #                     明文口令；只走环境变量或交互输入，**不作选项转发**（密码不进命令行）
+#   HARMONY_VERBOSE   等价于 --verbose：输出 .p12 / .cer / .p7b 全部字段
 #   HARMONY_ARGS      追加到 signing-config 命令末尾的额外参数，例如 HARMONY_ARGS="--write"
 #
 # 转发规则：只有「make 命令行上显式传入」的变量才转成选项

@@ -299,7 +299,7 @@ const LEGACY_ERROR = /legacy|unsupported|rc2|provider/i
  *
  * @returns {{ meta: object, keys: object[], certs: object[] }}
  */
-function readPkcs12(path, password, help) {
+export function readPkcs12(path, password, help) {
   const secret = password ?? ''
   if (/[\r\n\0]/.test(secret)) {
     throw new UsageError('PKCS#12 密码不能包含换行或 NUL 字符', help())
@@ -718,7 +718,7 @@ function renderCertificates(path, { format, size, certificates }, verbose) {
  * 私钥只以算法形式出现（RSA / EC / Ed25519 等），不输出任何密钥材料；
  * 证书与密钥的对应关系优先按 localKeyID，缺失时退回 friendlyName（别名）。
  */
-function renderPkcs12(path, { size, keys, certs, meta }, verbose) {
+export function renderPkcs12(path, { size, keys, certs, meta }, verbose) {
   const lines = [
     line('文件', path),
     line('格式', 'PKCS#12'),

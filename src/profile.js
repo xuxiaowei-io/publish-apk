@@ -718,6 +718,15 @@ function renderProfile(path, size, p7b, payload, jsonCertificates, verbose) {
 
 // ------------------------------------------------------------------ 命令入口
 
+/** 解析 P7B 并返回 profile / 证书信息的行；供 profile 与 signing-config 共用 */
+export function profileInfoLines(buffer, path, help, verbose = false) {
+  const p7b = parseP7b(buffer, path, help)
+  const payload = parseProfilePayload(p7b.content)
+  const jsonCertificates =
+    payload.json === null ? [] : collectJsonCertificates(payload.json, help)
+  return renderProfile(path, buffer.length, p7b, payload, jsonCertificates, verbose).split('\n')
+}
+
 /** profile 命令：解析选项、读取 P7B 并输出 profile / 证书信息 */
 function runProfile(argv, env) {
   if (argv.some((token) => isHelpToken(token))) {

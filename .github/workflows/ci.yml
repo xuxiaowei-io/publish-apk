@@ -203,7 +203,13 @@ jobs:
           HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \
             --store-file "$tmp/storeFile.p12" --certpath "$tmp/cert.pem" \
             --profile "$tmp/profile.p7b" --key-alias smoke --no-keytool \
-            > "$tmp/signing.json"
+            > "$tmp/signing.json" 2> "$tmp/signing.err"
+          grep -q '^签名材料信息:' "$tmp/signing.err"
+          grep -q '^  --- .p12:' "$tmp/signing.err"
+          grep -q '^  --- .cer:' "$tmp/signing.err"
+          grep -q '^  --- .p7b:' "$tmp/signing.err"
+          grep -q '^  别名: smoke$' "$tmp/signing.err"
+          grep -q '^  类型: debug$' "$tmp/signing.err"
           node -e '
             const fs = require("node:fs");
             const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));

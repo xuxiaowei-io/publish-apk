@@ -33,7 +33,9 @@ import {
   stderr,
   stdout,
 } from './cli.js'
+import { certificateDetailLines, readPkcs12, renderPkcs12 } from './cert.js'
 import { decryptSecret, encryptSecret, generateMaterial, readMaterialKey } from './harmony-material.js'
+import { profileInfoLines } from './profile.js'
 import { normalizePemText } from './jwt.js'
 import { renderHelp } from './help.js'
 
@@ -58,6 +60,7 @@ const OPTION_PRODUCT = '--product'
 const OPTION_WRITE = '--write'
 const OPTION_NEW_MATERIAL = '--new-material'
 const OPTION_NO_KEYTOOL = '--no-keytool'
+const OPTION_VERBOSE = '--verbose'
 
 const SIGNING_OPTIONS = new Set([
   OPTION_STORE_FILE,
@@ -78,8 +81,9 @@ const SIGNING_OPTIONS = new Set([
   OPTION_WRITE,
   OPTION_NEW_MATERIAL,
   OPTION_NO_KEYTOOL,
+  OPTION_VERBOSE,
 ])
-const SIGNING_FLAGS = new Set([OPTION_WRITE, OPTION_NEW_MATERIAL, OPTION_NO_KEYTOOL])
+const SIGNING_FLAGS = new Set([OPTION_WRITE, OPTION_NEW_MATERIAL, OPTION_NO_KEYTOOL, OPTION_VERBOSE])
 
 const ENV_STORE_FILE = 'HARMONY_STORE_FILE'
 const ENV_STORE_FILE_BASE64 = 'HARMONY_STORE_FILE_BASE64'
@@ -99,6 +103,7 @@ const ENV_KEY_PASSWORD = 'HARMONY_KEY_PASSWORD'
 const ENV_CONFIG = 'HARMONY_CONFIG'
 const ENV_NAME = 'HARMONY_SIGNING_NAME'
 const ENV_PRODUCT = 'HARMONY_PRODUCT'
+const ENV_VERBOSE = 'HARMONY_VERBOSE'
 
 const DEFAULT_SIGN_ALG = 'SHA256withECDSA'
 const DEFAULT_CONFIG = 'build-profile.json5'
@@ -113,6 +118,31 @@ const MATERIAL_FIELDS = [
   'storeFile',
   'storePassword',
 ]
+
+const VERBOSE_ON_VALUES = new Set(['1', 'true', 'yes', 'on'])
+const VERBOSE_OFF_VALUES = new Set(['0', 'false', 'no', 'off'])
+
+/** 解析 --verbose / HARMONY_VERBOSE */
+function resolveSigningVerbose(options, env, help) {
+  if (options.get(OPTION_VERBOSE) === true) {
+    return true
+  }
+  const value = readEnv(env, ENV_VERBOSE)
+  if (value === undefined) {
+    return false
+  }
+  const normalized = value.trim().toLowerCase()
+  if (VERBOSE_ON_VALUES.has(normalized)) {
+    return true
+  }
+  if (VERBOSE_OFF_VALUES.has(normalized)) {
+    return false
+  }
+  throw new UsageError(
+    `环境变量 ${ENV_VERBOSE} 的值无效: "${value}"（开启用 1/true/yes/on，关闭用 0/false/no/off）`,
+    help(),
+  )
+}
 
 // ------------------------------------------------------------------ 帮助文档
 
@@ -169,6 +199,7 @@ function renderSigningConfigHelp() {
           [OPTION_WRITE, '把生成的 material 写回 build-profile.json5（只更新同名 signingConfig，改前备份）'],
           [OPTION_NEW_MATERIAL, 'material 已存在也重造一套（旧的挪成 material.bak-<时间戳>）'],
           [OPTION_NO_KEYTOOL, '跳过 keytool 别名发现与「口令能否打开 p12」的自检'],
+          [OPTION_VERBOSE, `输出 .p12 / .cer / .p7b 的详细信息（默认输出常用字段）；命令行未给出时读取 ${ENV_VERBOSE}`],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -193,13 +224,14 @@ function renderSigningConfigHelp() {
           [ENV_CONFIG, `等价于 ${OPTION_CONFIG}`],
           [ENV_NAME, `等价于 ${OPTION_NAME}`],
           [ENV_PRODUCT, `等价于 ${OPTION_PRODUCT}`],
+          [ENV_VERBOSE, '输出签名材料详细信息，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
         ],
       },
       {
         title: '输出',
         entries: [
-          ['stdout', '可以直接粘贴进 app.signingConfigs 的 signingConfig JSON'],
-          ['stderr', '进度、material 位置、keytool 自检结果与 --write 的备份路径'],
+          ['stdout', '可以直接粘贴进 app.signingConfigs 的 signingConfig JSON（保持纯 JSON，方便管道）'],
+          ['stderr', '签名材料信息（.p12 / .cer / .p7b）、进度、material 位置、keytool 自检结果与 --write 的备份路径'],
         ],
       },
       {
@@ -218,6 +250,7 @@ function renderSigningConfigHelp() {
       `  ${PROGRAM} huawei ${COMMAND_NAME} --store-file ./storeFile.p12 \\`,
       `    --certpath ./certpath.cer --profile ./profile.p7b`,
       '',
+      '说明: 默认在 stderr 输出 .p12 / .cer / .p7b 的材料信息；--verbose 输出全部字段',
       '说明: material 固定生成在 .p12 同级目录的 material/ 下；hvigor 的 DecipherUtil 从这里取 workKey',
       '说明: --store-file / HARMONY_STORE_FILE / HARMONY_STORE_FILE_BASE64 支持 .p12 路径或 BASE64；内容会写到 --store-file-out 或当前目录的 storeFile.p12',
       '说明: --profile / HARMONY_PROFILE / HARMONY_PROFILE_BASE64 支持 .p7b 路径或 BASE64；内容会写到 --profile-out 或 .p12 同级的 profile.p7b',
@@ -1054,6 +1087,41 @@ function writeSigningConfig(configFile, name, material, help) {
   return backup
 }
 
+/** 输出签名材料信息（写 stderr，保持 stdout 的 signingConfig JSON 纯净） */
+function emitMaterialInfo({ storeFile, certpath, profile, password, verbose }) {
+  stderr('签名材料信息:')
+  try {
+    const p12 = readPkcs12(storeFile, password, renderSigningConfigHelp)
+    const size = fs.statSync(storeFile).size
+    stderr(`  --- .p12: ${storeFile} ---`)
+    for (const line of renderPkcs12(storeFile, { size, ...p12 }, verbose).split('\n')) {
+      stderr(`  ${line}`)
+    }
+  } catch (error) {
+    stderr(`警告: 读取 .p12 信息失败: ${error.message}`)
+  }
+
+  try {
+    const certificate = new X509Certificate(fs.readFileSync(certpath))
+    stderr(`  --- .cer: ${certpath} ---`)
+    for (const line of certificateDetailLines(certificate, verbose)) {
+      stderr(`  ${line}`)
+    }
+  } catch (error) {
+    stderr(`警告: 读取 .cer 信息失败: ${error.message}`)
+  }
+
+  try {
+    const buffer = fs.readFileSync(profile)
+    stderr(`  --- .p7b: ${profile} ---`)
+    for (const line of profileInfoLines(buffer, profile, renderSigningConfigHelp, verbose)) {
+      stderr(`  ${line}`)
+    }
+  } catch (error) {
+    stderr(`警告: 读取 .p7b 信息失败: ${error.message}`)
+  }
+}
+
 // ------------------------------------------------------------------ 命令入口
 
 export async function runHuaweiSigningConfig(argv, env) {
@@ -1068,6 +1136,7 @@ export async function runHuaweiSigningConfig(argv, env) {
     renderSigningConfigHelp,
     SIGNING_FLAGS,
   )
+  const verbose = resolveSigningVerbose(options, env, renderSigningConfigHelp)
 
   const storeOptionValue = options.get(OPTION_STORE_FILE)
   const storeEnvValues = [
@@ -1193,6 +1262,14 @@ export async function runHuaweiSigningConfig(argv, env) {
     storeFile,
     renderSigningConfigHelp,
   )
+
+  emitMaterialInfo({
+    storeFile,
+    certpath,
+    profile,
+    password: storePassword.value,
+    verbose,
+  })
 
   const materialDir = path.join(path.dirname(storeFile), 'material')
   const { workKey, note } = prepareMaterial(
