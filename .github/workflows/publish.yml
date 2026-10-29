@@ -41,21 +41,9 @@ jobs:
           fi
           echo "Version $version verified"
 
-      - name: Check syntax
-        run: for file in src/*.js; do node --check "$file"; done
-
-      - name: Smoke test CLI
-        run: |
-          node src/publish-apk.js --version
-          node src/publish-apk.js huawei --help > /dev/null
-          node src/publish-apk.js huawei service-account --help > /dev/null
-          node src/publish-apk.js huawei service-account-upload-url --help > /dev/null
-          node src/publish-apk.js huawei client-credentials --help > /dev/null
-          node src/publish-apk.js huawei client-credentials-upload-url --help > /dev/null
-          node src/publish-apk.js google --help > /dev/null
-          node src/publish-apk.js google access-token --help > /dev/null
-          node src/publish-apk.js google upload-aab --help > /dev/null
-          node src/publish-apk.js help > /dev/null
+      # 语法检查、CLI smoke test 与文件命令 smoke test 在
+      # .github/workflows/ci.yml（push main / PR main）中执行；
+      # 发布流程只做 tag 版本校验与 npm 发布，不重复维护检查脚本。
 
       - name: Publish to npm
         run: |

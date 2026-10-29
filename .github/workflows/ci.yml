@@ -1,0 +1,111 @@
+# 代码检查：push 到 main、PR 到 main 时运行。
+#
+# 发布流程（.github/workflows/publish.yml）只在 tag 上运行，检查项统一放在这里，
+# 避免两处维护同一套语法检查与 smoke test。
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          package-manager-cache: false
+
+      - name: Print Node.js and npm versions
+        run: |
+          node -v
+          npm -v
+          openssl version
+
+      - name: Check syntax
+        run: for file in src/*.js; do node --check "$file"; done
+
+      - name: Smoke test CLI
+        run: |
+          node src/publish-apk.js --version
+          node src/publish-apk.js cert --help > /dev/null
+          node src/publish-apk.js profile --help > /dev/null
+          node src/publish-apk.js huawei --help > /dev/null
+          node src/publish-apk.js huawei service-account --help > /dev/null
+          node src/publish-apk.js huawei service-account-upload-url --help > /dev/null
+          node src/publish-apk.js huawei service-account-upload-file --help > /dev/null
+          node src/publish-apk.js huawei service-account-upload-file-package-info-update --help > /dev/null
+          node src/publish-apk.js huawei client-credentials --help > /dev/null
+          node src/publish-apk.js huawei client-credentials-upload-url --help > /dev/null
+          node src/publish-apk.js huawei client-credentials-upload-file --help > /dev/null
+          node src/publish-apk.js huawei client-credentials-upload-file-package-info-update --help > /dev/null
+          node src/publish-apk.js huawei signing-config --help > /dev/null
+          node src/publish-apk.js google --help > /dev/null
+          node src/publish-apk.js google access-token --help > /dev/null
+          node src/publish-apk.js google upload-aab --help > /dev/null
+          node src/publish-apk.js help > /dev/null
+
+      - name: Smoke test file commands
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          trap 'rm -rf "$tmp"' EXIT
+
+          # 自签名证书：cert 的 PEM 输入
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 \
+            -subj '/CN=smoke.test' -keyout "$tmp/key.pem" -out "$tmp/cert.pem"
+
+          node src/publish-apk.js cert --file "$tmp/cert.pem" > "$tmp/cert.txt"
+          grep -q '^证书数量: 1$' "$tmp/cert.txt"
+
+          # 用同一套证书生成 PKCS#12：cert 的 .p12 输入
+          openssl pkcs12 -export -in "$tmp/cert.pem" -inkey "$tmp/key.pem" \
+            -name smoke -out "$tmp/storeFile.p12" -passout pass:smoke
+
+          node src/publish-apk.js cert --file "$tmp/storeFile.p12" --password smoke > "$tmp/p12.txt"
+          grep -q '^别名: smoke$' "$tmp/p12.txt"
+
+          # 用 OpenSSL CMS 生成一个最小 P7B profile：profile 的输入
+          cat > "$tmp/profile.json" <<'JSON'
+          {"version-name":"1.0.0","version-code":1,"type":"debug","issuer":"smoke","bundle-info":{"bundle-name":"com.example.smoke","developer-id":"1","app-identifier":"2"},"validity":{"not-before":1893456000,"not-after":1924992000},"debug-info":{"device-ids":[],"device-id-type":"udid"},"permissions":{},"acls":{"allowed-acls":[]},"app-privilege-capabilities":[],"app-services-capabilities":{}}
+          JSON
+          openssl cms -sign -binary -nodetach -in "$tmp/profile.json" \
+            -signer "$tmp/cert.pem" -inkey "$tmp/key.pem" -outform DER -out "$tmp/profile.p7b"
+
+          node src/publish-apk.js profile --file "$tmp/profile.p7b" > "$tmp/profile.txt"
+          grep -q '^Bundle: com.example.smoke$' "$tmp/profile.txt"
+
+          # signing-config：material 生成 + 两串密文口令；不依赖 JDK
+          HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \
+            --store-file "$tmp/storeFile.p12" --certpath "$tmp/cert.pem" \
+            --profile "$tmp/profile.p7b" --key-alias smoke --no-keytool \
+            > "$tmp/signing.json"
+          node -e '
+            const fs = require("node:fs");
+            const cfg = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (cfg.material.keyAlias !== "smoke") throw new Error("bad keyAlias");
+            if (!/^[0-9a-f]+$/.test(cfg.material.storePassword)) throw new Error("bad storePassword");
+            if (!/^[0-9a-f]+$/.test(cfg.material.keyPassword)) throw new Error("bad keyPassword");
+          ' "$tmp/signing.json"
+          test -d "$tmp/material"
+
+          # --write：只更新同名 signingConfig 的 material
+          printf '%s\n' '{"app":{"signingConfigs":[{"name":"default","type":"HarmonyOS","material":{}}]}}' \
+            > "$tmp/build-profile.json5"
+          HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \
+            --store-file "$tmp/storeFile.p12" --certpath "$tmp/cert.pem" \
+            --profile "$tmp/profile.p7b" --key-alias smoke --no-keytool \
+            --config "$tmp/build-profile.json5" --name default --write > /dev/null
+          grep -q '"keyAlias": "smoke"' "$tmp/build-profile.json5"
