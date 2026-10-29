@@ -59,17 +59,18 @@ publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 �
 publish-apk profile --file ./profile.p7b                  # 查看 P7B Provisioning Profile
 publish-apk hap --file ./app-signed.hap                    # 查看 HAP 安装包信息
 publish-apk app --file ./app-signed.app                    # 查看 APP 安装包信息
+publish-apk apk --file ./app-arm64-v8a-release.apk        # 查看 APK 安装包信息
 publish-apk huawei                # huawei 子命令帮助
 publish-apk huawei <命令> --help   # 某个子命令的帮助文档
 publish-apk google                # google 子命令帮助
 publish-apk google <命令> --help   # 某个子命令的帮助文档
 ```
 
-### 为什么会有查看证书 / profile / HAP / APP 的命令？
+### 为什么会有查看证书 / profile / HAP / APP / APK 的命令？
 
-本项目的主流程是把手机 APP 上传到应用商店；`cert` / `profile` 是**签名材料的本地核对工具**，`hap` / `app` 是**安装包的本地核对工具**，都不是上传流程中的一步。
+本项目的主流程是把手机 APP 上传到应用商店；`cert` / `profile` 是**签名材料的本地核对工具**，`hap` / `app` / `apk` 是**安装包的本地核对工具**，都不是上传流程中的一步。
 
-华为鸿蒙 APP 在打包 / 签名时需要 `.cer`、`.p12`、`.p7b` 三类文件。同一开发者账号下往往有多套证书与 Profile，文件名、别名、Bundle、有效期、设备范围都很接近，容易拿错；`cert` / `profile` 把关键字段逐行列出，**主要用于区分多个鸿蒙证书 / Profile，确认当前签名配置用的是哪一份**。`hap` / `app` 则用于核对构建产物本身，尤其是区分同名的 `signed.*` 与 `unsigned.*`：
+华为鸿蒙 APP 在打包 / 签名时需要 `.cer`、`.p12`、`.p7b` 三类文件。同一开发者账号下往往有多套证书与 Profile，文件名、别名、Bundle、有效期、设备范围都很接近，容易拿错；`cert` / `profile` 把关键字段逐行列出，**主要用于区分多个鸿蒙证书 / Profile，确认当前签名配置用的是哪一份**。`hap` / `app` / `apk` 则用于核对构建产物本身，尤其是区分同名的 `signed.*` 与 `unsigned.*`：
 
 | 文件 | 作用 | 查看方式 |
 | --- | --- | --- |
@@ -78,8 +79,9 @@ publish-apk google <命令> --help   # 某个子命令的帮助文档
 | `.p7b` | 鸿蒙 Provisioning Profile（Bundle、有效期、设备、权限、证书链） | `publish-apk profile --file ./profile.p7b` |
 | `.hap` | 鸿蒙单模块安装包（包名、版本、模块、设备、API、签名状态） | `publish-apk hap --file ./app-signed.hap` |
 | `.app` | 鸿蒙 App Pack（外层包信息、内层 HAP / HSP、签名状态） | `publish-apk app --file ./app-signed.app` |
+| `.apk` | Android 安装包（包名、SDK、ABI、权限、签名证书） | `publish-apk apk --file ./app-arm64-v8a-release.apk` |
 
-查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文，`hap` / `app` 只读包内 JSON 与签名块头；这些命令只读取本地文件，不会访问应用商店。
+查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文，`hap` / `app` / `apk` 只读包内信息与签名块头；这些命令只读取本地文件，不会访问应用商店。
 
 ### cert（查看证书 / PKCS#12 密钥库信息）
 
@@ -176,6 +178,30 @@ APP_VERBOSE=1 publish-apk app --file ./app.app
   证书字段与 `cert` 命令一致，但不输出证书 PEM 原文。
 - 外层签名只做检测，**不执行证书链、摘要或 Merkle 树验签**；输出里会明确写「未验签」。
 - APP 解析只使用 Node 内置能力（ZIP 中央目录 + `node:zlib`），不依赖 JDK、`openssl` 或 npm 第三方包。
+
+### apk（查看 APK 安装包信息）
+
+APK 是 Android 安装包，本质也是 ZIP：`AndroidManifest.xml` 是 Android 二进制 XML，
+签名可能是 JAR v1（`META-INF/*.RSA` 等）或 APK Signature Scheme v2 / v3 / v3.1。
+本命令直接解析二进制 Manifest 与 APK Signing Block，不依赖 `aapt` / `apkanalyzer`。
+文件必须用 `--file`（或环境变量 `APK_FILE`）显式指定，**没有默认文件**。
+
+```bash
+publish-apk apk --file ./app-arm64-v8a-release.apk
+publish-apk apk --file ./app-armeabi-v7a-release.apk --verbose
+APK_FILE=./app.apk publish-apk apk
+APK_VERBOSE=1 publish-apk apk --file ./app.apk
+```
+
+- 默认输出：文件大小、ZIP 条目数、签名状态与签名方案、包名、版本 / versionCode、
+  Min / Target / 编译 SDK、ABI、DEX 数量、权限、启动 Activity，以及签名证书（叶子证书）。
+- `--verbose` / `APK_VERBOSE=1` 追加：应用标签、允许备份、uses-feature、全部 Activity，
+  APK Signing Block 的 pair（v2 / v3 / v3.1 / Source Stamp / Verity Padding）、
+  全部 ZIP 条目与完整签名证书链。
+- 签名只做检测，**不执行证书链、摘要或签名验签**；输出里会明确写「未验签」。
+- 应用标签是资源引用（如 `@0x7f090001`）时不会解析 `resources.arsc`，`--verbose` 会原样输出。
+- APK 解析只使用 Node 内置能力（ZIP 中央目录 + `node:zlib`），不依赖 JDK、`openssl` 或 npm 第三方包。
+- 不输出证书 PEM 原文；APK 里没有私钥。
 
 ### huawei 子命令
 
@@ -503,7 +529,7 @@ publish-apk google upload-aab --package-name com.example.app --file ./app-releas
 
 ## 环境变量
 
-带值的选项都有同名环境变量兜底，**命令行选项优先**；开关型选项 `--verbose` 对应各命令的 `*_VERBOSE`（`cert` 用 `CERT_VERBOSE`，`profile` 用 `PROFILE_VERBOSE`，`hap` 用 `HAP_VERBOSE`，`app` 用 `APP_VERBOSE`），取值规则见下表。
+带值的选项都有同名环境变量兜底，**命令行选项优先**；开关型选项 `--verbose` 对应各命令的 `*_VERBOSE`（`cert` 用 `CERT_VERBOSE`，`profile` 用 `PROFILE_VERBOSE`，`hap` 用 `HAP_VERBOSE`，`app` 用 `APP_VERBOSE`，`apk` 用 `APK_VERBOSE`），取值规则见下表。
 
 ### 证书（`CERT_*`）
 
@@ -533,6 +559,13 @@ publish-apk google upload-aab --package-name com.example.app --file ./app-releas
 | --- | --- | --- |
 | `APP_FILE` | `--file` | APP 文件路径；**必填**，没有默认文件 |
 | `APP_VERBOSE` | `--verbose` | 输出全部字段：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
+
+### APK 安装包（`APK_*`）
+
+| 环境变量 | 等价选项 | 说明 |
+| --- | --- | --- |
+| `APK_FILE` | `--file` | APK 文件路径；**必填**，没有默认文件 |
+| `APK_VERBOSE` | `--verbose` | 输出全部字段：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 
 ### 华为（`HUAWEI_*`）
 
@@ -676,6 +709,8 @@ make hap HAP_FILE=./app-signed.hap               # 查看 HAP 安装包信息
 make hap-help                                    # hap 命令帮助
 make app APP_FILE=./app-signed.app               # 查看 APP 安装包信息
 make app-help                                    # app 命令帮助
+make apk APK_FILE=./app-arm64-v8a-release.apk    # 查看 APK 安装包信息
+make apk-help                                    # apk 命令帮助
 HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-config \
   HARMONY_STORE_FILE=./storeFile.p12 HARMONY_CERTPATH=./certpath.cer \
   HARMONY_PROFILE=./profile.p7b HARMONY_SIGNING_NAME=default HARMONY_ARGS="--write"
@@ -695,7 +730,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 

@@ -206,7 +206,7 @@ function renderAppHelp() {
 // ------------------------------------------------------------------ ZIP 解析
 
 /** 从文件尾部找 EOCD，返回中央目录位置与条目数 */
-function readEndOfCentralDirectory(buffer, help) {
+export function readEndOfCentralDirectory(buffer, help) {
   const min = Math.max(0, buffer.length - 22 - 0xffff)
   for (let offset = buffer.length - 22; offset >= min; offset -= 1) {
     if (buffer.readUInt32LE(offset) !== EOCD_SIGNATURE) {
@@ -223,7 +223,7 @@ function readEndOfCentralDirectory(buffer, help) {
       throw new UsageError('暂不支持 ZIP64 格式的 HAP', help())
     }
     if (centralOffset + centralSize > buffer.length) {
-      throw new UsageError('HAP 的 ZIP 中央目录越界，文件可能已损坏', help())
+      throw new UsageError('ZIP 中央目录越界，文件可能已损坏', help())
     }
     return { count, centralOffset, centralSize }
   }
@@ -231,12 +231,12 @@ function readEndOfCentralDirectory(buffer, help) {
 }
 
 /** 读取中央目录里的条目元数据（不立即解压） */
-function readZipEntries(buffer, eocd, help) {
+export function readZipEntries(buffer, eocd, help) {
   const entries = []
   let offset = eocd.centralOffset
   for (let index = 0; index < eocd.count; index += 1) {
     if (offset + 46 > buffer.length || buffer.readUInt32LE(offset) !== CENTRAL_SIGNATURE) {
-      throw new UsageError(`HAP 的 ZIP 中央目录损坏（第 ${index + 1} 个条目）`, help())
+      throw new UsageError(`ZIP 中央目录损坏（第 ${index + 1} 个条目）`, help())
     }
     const flags = buffer.readUInt16LE(offset + 8)
     const method = buffer.readUInt16LE(offset + 10)
@@ -249,7 +249,7 @@ function readZipEntries(buffer, eocd, help) {
     const nameStart = offset + 46
     const nameEnd = nameStart + nameLength
     if (nameEnd > buffer.length) {
-      throw new UsageError('HAP 的 ZIP 条目名越界，文件可能已损坏', help())
+      throw new UsageError('ZIP 条目名越界，文件可能已损坏', help())
     }
     if (compressedSize === 0xffffffff || size === 0xffffffff || localOffset === 0xffffffff) {
       throw new UsageError('暂不支持 ZIP64 格式的 HAP', help())
@@ -268,7 +268,7 @@ function readZipEntries(buffer, eocd, help) {
 }
 
 /** 按文件名找条目；兼容前面带目录的打包方式 */
-function findZipEntry(entries, name) {
+export function findZipEntry(entries, name) {
   return (
     entries.find((entry) => entry.name === name) ??
     entries.find((entry) => entry.name.endsWith(`/${name}`)) ??
@@ -277,22 +277,22 @@ function findZipEntry(entries, name) {
 }
 
 /** 解压单个 ZIP 条目 */
-function readZipEntryData(buffer, entry, help) {
+export function readZipEntryData(buffer, entry, help) {
   if ((entry.flags & 0x1) !== 0) {
-    throw new UsageError(`HAP 条目已加密，无法读取: ${entry.name}`, help())
+    throw new UsageError(`ZIP 条目已加密，无法读取: ${entry.name}`, help())
   }
   if (entry.localOffset + 30 > buffer.length) {
-    throw new UsageError(`HAP 条目的本地头越界: ${entry.name}`, help())
+    throw new UsageError(`ZIP 条目的本地头越界: ${entry.name}`, help())
   }
   if (buffer.readUInt32LE(entry.localOffset) !== LOCAL_SIGNATURE) {
-    throw new UsageError(`HAP 条目的本地头损坏: ${entry.name}`, help())
+    throw new UsageError(`ZIP 条目的本地头损坏: ${entry.name}`, help())
   }
   const nameLength = buffer.readUInt16LE(entry.localOffset + 26)
   const extraLength = buffer.readUInt16LE(entry.localOffset + 28)
   const dataStart = entry.localOffset + 30 + nameLength + extraLength
   const dataEnd = dataStart + entry.compressedSize
   if (dataEnd > buffer.length) {
-    throw new UsageError(`HAP 条目数据越界: ${entry.name}`, help())
+    throw new UsageError(`ZIP 条目数据越界: ${entry.name}`, help())
   }
   const compressed = buffer.subarray(dataStart, dataEnd)
   let data
@@ -302,14 +302,14 @@ function readZipEntryData(buffer, entry, help) {
     try {
       data = inflateRawSync(compressed)
     } catch (error) {
-      throw new UsageError(`HAP 条目解压失败: ${entry.name}: ${error.message}`, help())
+      throw new UsageError(`ZIP 条目解压失败: ${entry.name}: ${error.message}`, help())
     }
   } else {
     throw new UsageError(`不支持的 ZIP 压缩方法 ${entry.method}: ${entry.name}`, help())
   }
   if (data.length !== entry.size) {
     throw new UsageError(
-      `HAP 条目解压后大小不一致: ${entry.name}（${data.length} != ${entry.size}）`,
+      `ZIP 条目解压后大小不一致: ${entry.name}（${data.length} != ${entry.size}）`,
       help(),
     )
   }
@@ -518,7 +518,7 @@ function orderCertificateChain(certificates) {
 }
 
 /** 输出签名证书；默认只输出每组的第一张，--verbose 输出完整证书链 */
-function addSignatureCertificates(lines, groups, verbose) {
+export function addSignatureCertificates(lines, groups, verbose) {
   if (groups.length === 0) {
     return
   }
@@ -563,7 +563,7 @@ function names(value) {
     .filter((item) => typeof item === 'string' && item !== '')
 }
 
-function formatBytes(size) {
+export function formatBytes(size) {
   const units = ['B', 'KiB', 'MiB', 'GiB']
   let value = size
   let index = 0
