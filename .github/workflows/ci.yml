@@ -46,6 +46,7 @@ jobs:
           node src/publish-apk.js app --help > /dev/null
           node src/publish-apk.js apk --help > /dev/null
           node src/publish-apk.js aab --help > /dev/null
+          node src/publish-apk.js keystore-env --help > /dev/null
           node src/publish-apk.js keystore-gen --help > /dev/null
           node src/publish-apk.js keystore --help > /dev/null
           node src/publish-apk.js huawei --help > /dev/null

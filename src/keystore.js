@@ -1,5 +1,9 @@
 /**
- * Android 签名密钥库校验命令（`publish-apk keystore`）。
+ * Android 签名密钥库工具（`publish-apk keystore` / `keystore-env` / `keystore-gen`）。
+ *
+ *   - `keystore`：校验已有 keystore 的口令 / 别名 / 私钥；
+ *   - `keystore-env`：导出 CI 变量（BASE64 / 口令 / 别名）；
+ *   - `keystore-gen`：用 keytool 快速生成 PKCS12 / JKS。
  *
  * 定位：与具体应用市场无关的本地工具 —— 拿 CI 里那套 Android 签名变量
  * （ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_FILE / ANDROID_KEYSTORE_PASSWORD /
@@ -48,6 +52,7 @@ import { renderHelp } from './help.js'
 /** 命令名（根帮助与示例里使用） */
 const COMMAND_NAME = 'keystore'
 const GEN_COMMAND_NAME = 'keystore-gen'
+const ENV_COMMAND_NAME = 'keystore-env'
 
 /** 密钥库路径；与 --base64 同用时是解码后的输出路径 */
 const OPTION_FILE = '--file'
@@ -65,6 +70,7 @@ const OPTION_KEY_SIZE = '--key-size'
 const OPTION_VALIDITY = '--validity'
 const OPTION_DNAME = '--dname'
 const OPTION_FORCE = '--force'
+const OPTION_FORMAT = '--format'
 
 const KEYSTORE_OPTIONS = new Set([
   OPTION_FILE,
@@ -87,6 +93,15 @@ const GEN_OPTIONS = new Set([
   OPTION_FORCE,
 ])
 const GEN_FLAGS = new Set([OPTION_FORCE])
+
+const ENV_OPTIONS = new Set([
+  OPTION_FILE,
+  OPTION_STORE_PASSWORD,
+  OPTION_KEY_ALIAS,
+  OPTION_KEY_PASSWORD,
+  OPTION_FORMAT,
+])
+const ENV_FLAGS = new Set()
 
 /** 密钥库路径，等价于 --file（也可用 ANDROID_KEYSTORE 补） */
 const ENV_FILE = 'ANDROID_KEYSTORE_FILE'
@@ -836,6 +851,158 @@ async function runKeystoreGen(argv, env) {
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
   }
+}
+
+/** shell 单引号安全引用 */
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`
+}
+
+/** keystore-env 帮助文档 */
+function renderKeystoreEnvHelp() {
+  return renderHelp({
+    title: `${PROGRAM} ${ENV_COMMAND_NAME} - 导出 Android keystore 的 CI 变量`,
+    usage: [`${PROGRAM} ${ENV_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '选项',
+        entries: [
+          [
+            `${OPTION_FILE} <路径>`,
+            `keystore 文件路径，必填（可用 ${ENV_FILE} / ${ENV_KEYSTORE} 补齐）`,
+          ],
+          [
+            `${OPTION_STORE_PASSWORD} <明文>`,
+            `keystore 明文口令；建议用 ${ENV_STORE_PASSWORD} 或交互输入`,
+          ],
+          [`${OPTION_KEY_ALIAS} <别名>`, `私钥别名；不传时用 keytool 自动识别（可用 ${ENV_KEY_ALIAS} 补齐）`],
+          [
+            `${OPTION_KEY_PASSWORD} <明文>`,
+            `私钥明文口令；默认与 keystore 口令相同（可用 ${ENV_KEY_PASSWORD} 补齐）`,
+          ],
+          [
+            `${OPTION_FORMAT} <env|shell|json>`,
+            '输出格式，默认 env（KEY=value，一行一个）；shell 输出 export KEY=...；json 输出对象',
+          ],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_FILE, `keystore 文件路径，等价于 ${OPTION_FILE}`],
+          [ENV_KEYSTORE, `${ENV_FILE} 的别名`],
+          [ENV_STORE_PASSWORD, `keystore 明文口令，等价于 ${OPTION_STORE_PASSWORD}`],
+          [ENV_KEY_ALIAS, `私钥别名，等价于 ${OPTION_KEY_ALIAS}`],
+          [ENV_KEY_PASSWORD, `私钥明文口令，等价于 ${OPTION_KEY_PASSWORD}`],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          [
+            'stdout',
+            'ANDROID_KEYSTORE_BASE64 / ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_ALIAS / ANDROID_KEY_PASSWORD',
+          ],
+          ['stderr', '明文口令警告与错误信息'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '成功'],
+          ['1', '参数错误、口令 / 别名校验失败或文件读取失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12`,
+      `  ANDROID_KEYSTORE_PASSWORD=<口令> ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format shell`,
+      `  ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format json > keystore.json`,
+      '',
+      '警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享',
+      '说明: 生成前会用 keytool 校验 keystore 口令、别名与私钥口令',
+      '说明: ANDROID_KEYSTORE_BASE64 是单行 BASE64，可直接配置到 CI 变量',
+      '说明: shell 格式用单引号安全转义，可 eval/source；env 格式适合逐项复制到 CI 变量',
+    ],
+  })
+}
+
+function renderKeystoreEnvVariables(buffer, alias, storePassword, keyPassword, format, help) {
+  const values = [
+    ['ANDROID_KEYSTORE_BASE64', buffer.toString('base64')],
+    ['ANDROID_KEYSTORE_PASSWORD', storePassword],
+    ['ANDROID_KEY_ALIAS', alias],
+    ['ANDROID_KEY_PASSWORD', keyPassword],
+  ]
+  if (format === 'env') {
+    return values.map(([name, value]) => `${name}=${value}`).join('\n')
+  }
+  if (format === 'shell') {
+    return values.map(([name, value]) => `export ${name}=${shellQuote(value)}`).join('\n')
+  }
+  if (format === 'json') {
+    return JSON.stringify(Object.fromEntries(values), null, 2)
+  }
+  throw new UsageError(`不支持的输出格式: ${format}（仅支持 env / shell / json）`, help)
+}
+
+async function runKeystoreEnv(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderKeystoreEnvHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(argv, ENV_OPTIONS, renderKeystoreEnvHelp, ENV_FLAGS)
+  const fileValue =
+    options.get(OPTION_FILE) ?? readEnv(env, ENV_FILE) ?? readEnv(env, ENV_KEYSTORE)
+  if (fileValue === undefined) {
+    throw new UsageError(
+      `缺少 keystore：请用 ${OPTION_FILE} 指定文件，或用环境变量 ${ENV_FILE} / ${ENV_KEYSTORE} 补齐`,
+      renderKeystoreEnvHelp(),
+    )
+  }
+  const format = String(options.get(OPTION_FORMAT) ?? 'env').trim().toLowerCase()
+  if (!['env', 'shell', 'json'].includes(format)) {
+    throw new UsageError(`不支持的输出格式: ${format}（仅支持 env / shell / json）`, renderKeystoreEnvHelp())
+  }
+
+  const absolute = path.resolve(fileValue)
+  if (!fs.existsSync(absolute)) {
+    throw new UsageError(`keystore 文件不存在: ${fileValue}`, renderKeystoreEnvHelp())
+  }
+  if (!fs.statSync(absolute).isFile()) {
+    throw new UsageError(`keystore 路径不是普通文件: ${fileValue}`, renderKeystoreEnvHelp())
+  }
+
+  const storePassword = await resolveStorePassword(options, env, renderKeystoreEnvHelp)
+  const keyPassword =
+    options.get(OPTION_KEY_PASSWORD) ?? readEnv(env, ENV_KEY_PASSWORD) ?? storePassword
+  if (/[\r\n\0]/.test(storePassword)) {
+    throw new UsageError('keystore 口令不能包含换行或 NUL 字符', renderKeystoreEnvHelp())
+  }
+  if (/[\r\n\0]/.test(keyPassword)) {
+    throw new UsageError('密钥口令不能包含换行或 NUL 字符', renderKeystoreEnvHelp())
+  }
+
+  const buffer = fs.readFileSync(absolute)
+  const info = verifyKeystore(absolute, buffer, {
+    alias: options.get(OPTION_KEY_ALIAS) ?? readEnv(env, ENV_KEY_ALIAS),
+    storePassword,
+    keyPassword,
+  })
+  stderr('警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享')
+  stdout(
+    renderKeystoreEnvVariables(buffer, info.alias, storePassword, keyPassword, format, renderKeystoreEnvHelp()),
+  )
+  return EXIT_OK
+}
+
+export const keystoreEnvCommand = {
+  name: ENV_COMMAND_NAME,
+  summary: '导出 Android keystore 的 CI 变量（BASE64 / 口令 / 别名）',
+  run: runKeystoreEnv,
 }
 
 export const keystoreGenCommand = {

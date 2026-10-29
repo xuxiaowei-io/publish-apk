@@ -61,6 +61,7 @@ publish-apk -v                    # 版本号
 publish-apk cert --file ./certpath.cer                    # 查看证书
 publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 密钥库
 publish-apk keystore --file ./release.p12 --store-password <口令> --key-alias release  # 校验 Android 签名密钥库
+publish-apk keystore-env --file ./release.p12  # 导出 CI 变量（含明文口令）
 publish-apk keystore-gen --file ./release.p12 --key-alias release  # 快速生成 Android keystore
 ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore  # 校验 CI 变量
 publish-apk profile --file ./profile.p7b                  # 查看 P7B Provisioning Profile
@@ -188,6 +189,37 @@ ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore
 - `--store-password` / `--key-password` 会进入 shell 历史与 `ps`，建议用
   `ANDROID_KEYSTORE_PASSWORD` / `ANDROID_KEY_PASSWORD`；非交互环境没有给口令时直接报错。
 - 校验失败（口令错、别名不存在、私钥口令错、`keytool` 不可用）以退出代码 `1` 结束，不会写输出文件。
+
+### keystore-env（导出 Android keystore 的 CI 变量）
+
+把一份 keystore 文件导出成 CI 可直接配置的四个变量：
+
+| 变量 | 内容 |
+| --- | --- |
+| `ANDROID_KEYSTORE_BASE64` | keystore 文件的单行 BASE64 |
+| `ANDROID_KEYSTORE_PASSWORD` | keystore 明文口令 |
+| `ANDROID_KEY_ALIAS` | 私钥别名（不传 `--key-alias` 时由 keytool 自动识别） |
+| `ANDROID_KEY_PASSWORD` | 私钥明文口令（默认与 keystore 口令相同） |
+
+```bash
+# 默认 env 格式：KEY=value，一行一个，适合逐项复制到 CI 变量
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12
+
+# shell 格式：export KEY='...'，单引号安全转义，可 source / eval
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12 --format shell
+
+# JSON 格式
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12 --format json > keystore.json
+```
+
+- 生成变量前会用 keytool 校验 keystore 口令、别名与私钥口令，校验失败不会输出变量。
+- `--key-alias` / `ANDROID_KEY_ALIAS` 不传时自动识别；`--key-password` / `ANDROID_KEY_PASSWORD`
+  不传时使用 keystore 口令。
+- `env` 格式不额外加引号，适合把 `=` 后面的值逐项复制到 CI 变量；`shell` 格式适合本地
+  `source`；`json` 格式适合脚本解析。
+- **警告：输出包含明文口令**，不要写入日志、提交仓库或公开分享；`stdout` 只有变量，
+  `stderr` 只有警告与错误。
+- 依赖 JDK 的 `keytool`；可用 `KEYTOOL=/path/to/keytool` 指定。
 
 ### keystore-gen（快速生成 Android 签名密钥库）
 
