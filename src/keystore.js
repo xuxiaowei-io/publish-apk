@@ -71,6 +71,8 @@ const OPTION_VALIDITY = '--validity'
 const OPTION_DNAME = '--dname'
 const OPTION_FORCE = '--force'
 const OPTION_FORMAT = '--format'
+/** env 输出的键值分隔符；默认 =，可设为 : */
+const OPTION_SEPARATOR = '--separator'
 /** keystore-env：额外输出 ANDROID_KEYSTORE_FILE（绝对路径） */
 const OPTION_INCLUDE_FILE = '--include-file'
 /** keystore-env：不输出 ANDROID_KEYSTORE_BASE64 */
@@ -104,6 +106,7 @@ const ENV_OPTIONS = new Set([
   OPTION_KEY_ALIAS,
   OPTION_KEY_PASSWORD,
   OPTION_FORMAT,
+  OPTION_SEPARATOR,
   OPTION_INCLUDE_FILE,
   OPTION_NO_BASE64,
 ])
@@ -864,6 +867,15 @@ function shellQuote(value) {
   return `'${String(value).replaceAll("'", "'\\''")}'`
 }
 
+/** env 格式的值加双引号，并转义会破坏 shell / dotenv 的字符 */
+function quoteEnvValue(value) {
+  return `"${String(value)
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('$', '\\$')
+    .replaceAll('`', '\\`')}"`
+}
+
 /** keystore-env 帮助文档 */
 function renderKeystoreEnvHelp() {
   return renderHelp({
@@ -888,8 +900,9 @@ function renderKeystoreEnvHelp() {
           ],
           [
             `${OPTION_FORMAT} <env|shell|json>`,
-            '输出格式，默认 env（KEY=value，一行一个）；shell 输出 export KEY=...；json 输出对象',
+            '输出格式，默认 env（KEY="value"，一行一个）；shell 输出 export KEY=...；json 输出对象',
           ],
+          [OPTION_SEPARATOR, 'env 输出的分隔符：默认 =；可设为 :'],
           [OPTION_INCLUDE_FILE, '额外输出 ANDROID_KEYSTORE_FILE（绝对路径）'],
           [OPTION_NO_BASE64, '不输出 ANDROID_KEYSTORE_BASE64（本地 signing.env 用）'],
           ['-h, --help', '显示帮助信息'],
@@ -952,7 +965,12 @@ function renderKeystoreEnvVariables(absolute, buffer, alias, storePassword, keyP
     ['ANDROID_KEY_PASSWORD', keyPassword],
   )
   if (format === 'env') {
-    return values.map(([name, value]) => `${name}=${value}`).join('\n')
+    const separator = options.get(OPTION_SEPARATOR) ?? '='
+    if (separator !== '=' && separator !== ':') {
+      throw new UsageError(`--separator 只支持 = 或 :，实际: ${separator}`, help)
+    }
+    const between = separator === ':' ? ': ' : '='
+    return values.map(([name, value]) => `${name}${between}${quoteEnvValue(value)}`).join('\n')
   }
   if (format === 'shell') {
     return values.map(([name, value]) => `export ${name}=${shellQuote(value)}`).join('\n')
@@ -981,6 +999,10 @@ async function runKeystoreEnv(argv, env) {
   const format = String(options.get(OPTION_FORMAT) ?? 'env').trim().toLowerCase()
   if (!['env', 'shell', 'json'].includes(format)) {
     throw new UsageError(`不支持的输出格式: ${format}（仅支持 env / shell / json）`, renderKeystoreEnvHelp())
+  }
+  const separator = options.get(OPTION_SEPARATOR)
+  if (separator !== undefined && format !== 'env') {
+    throw new UsageError(`--separator 只用于 env 格式；当前是 ${format}`, renderKeystoreEnvHelp())
   }
 
   const absolute = path.resolve(fileValue)

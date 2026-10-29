@@ -204,8 +204,11 @@ ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore
 
 
 ```bash
-# 默认 env 格式：KEY=value，一行一个，适合逐项复制到 CI 变量
+# 默认 env 格式：KEY="value"，一行一个，适合逐项复制到 CI 变量
 ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12
+
+# 冒号分隔：KEY: "value"
+ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12 --separator :
 
 # shell 格式：export KEY='...'，单引号安全转义，可 source / eval
 ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12 --format shell
@@ -223,7 +226,7 @@ ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12
   不传时使用 keystore 口令。
 - `--include-file` 额外输出 `ANDROID_KEYSTORE_FILE`；`--no-base64` 去掉 `ANDROID_KEYSTORE_BASE64`。
   两者一起用适合生成 `.signing/android.env`，避免把整份 BASE64 再塞进本地环境。
-- `env` 格式不额外加引号，适合把 `=` 后面的值逐项复制到 CI 变量；`shell` 格式适合本地
+- `env` 格式的值用双引号包起来并转义特殊字符，适合逐项复制到 CI 变量；`shell` 格式适合本地
   `source`；`json` 格式适合脚本解析。
 - **警告：输出包含明文口令**，不要写入日志、提交仓库或公开分享；`stdout` 只有变量，
   `stderr` 只有警告与错误。
@@ -397,6 +400,7 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 | `huawei signing-passwords` | 只补充已有 `build-profile.json5` 的 `keyPassword` / `storePassword` | 补充结果 |
 | `huawei signing-material` | 用 `--set 字段=值` 替换 material 字段 | 替换结果 |
 | `huawei signing-material-env` | 用 `HARMONY_*` 环境变量先校验再替换 material | 替换结果 |
+| `huawei signing-env` | 按产品导出鸿蒙签名 CI 变量（BASE64 / 口令） | 七个 `HARMONY_*` 变量 |
 
 ### 生成鸿蒙签名配置（`huawei signing-config`）
 
@@ -508,6 +512,37 @@ publish-apk huawei signing-material-env \
 - 只给 `HARMONY_KEY_PASSWORD` 时还需要 `HARMONY_STORE_PASSWORD` 才能校验 / 加密。
 - 如果只想手工替换路径 / 别名，用 `huawei signing-material --set 字段=值`；只补口令用
   `huawei signing-passwords`。
+
+### 按产品导出鸿蒙签名 CI 变量（`huawei signing-env`）
+
+从 `build-profile.json5` 的 `products[].name` 找到对应 `signingConfig`，读取 material、p12、
+证书、Profile 与密文口令，导出 CI 需要的七个变量：
+
+```bash
+publish-apk huawei signing-env --config ./build-profile.json5 --product prod
+
+# 冒号分隔：HARMONY_*: "..."
+publish-apk huawei signing-env --config ./build-profile.json5 --product prod --separator :
+```
+
+输出：
+
+```text
+HARMONY_STORE_FILE_BASE64="..."
+HARMONY_PROFILE_BASE64="..."
+HARMONY_CERTPATH_BASE64="..."
+HARMONY_STORE_PASSWORD="<明文>"
+HARMONY_KEY_PASSWORD="<明文>"
+HARMONY_KEY_ALIAS="release"
+HARMONY_SIGN_ALG="SHA256withECDSA"
+```
+
+- `--product` 按产品名找它挂的 `signingConfig`；也可用 `--name` 直接指定签名配置。
+- 只读：不会改 `build-profile.json5`、material 或 p12。
+- 要求 `material` 与 `material.storeFile` 指向的 `.p12` 同级，且口令能用 material 解密。
+- p12 / 证书 / Profile 路径相对 `build-profile.json5` 解析；文件必须存在。
+- `--format env|shell|json`，默认 `env`；`shell` 用单引号安全转义，`json` 便于脚本解析。
+- **警告：stdout 包含明文口令**，不要写入日志、提交仓库或公开分享。
 
 ### 上传一个安装包分三步
 
@@ -991,6 +1026,7 @@ make huawei-signing-config-help                  # 鸿蒙签名配置帮助
 HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-passwords HARMONY_CONFIG=./build-profile.json5 HARMONY_SIGNING_NAME=default
 make huawei-signing-material HARMONY_CONFIG=./build-profile.json5 HARMONY_ARGS="--set storeFile=./storeFile.p12 --set keyAlias=release"
 HARMONY_STORE_FILE_BASE64=... make huawei-signing-material-env HARMONY_CONFIG=./build-profile.json5 HARMONY_SIGNING_NAME=default
+make huawei-signing-env HARMONY_CONFIG=./build-profile.json5 HARMONY_PRODUCT=prod HARMONY_ARGS="--format env"
 make huawei-signing-passwords-help               # 只补充 keyPassword/storePassword 帮助
 make huawei-help                                 # huawei 子命令帮助
 make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem

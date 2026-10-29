@@ -62,6 +62,7 @@ jobs:
           node src/publish-apk.js huawei signing-passwords --help > /dev/null
           node src/publish-apk.js huawei signing-material --help > /dev/null
           node src/publish-apk.js huawei signing-material-env --help > /dev/null
+          node src/publish-apk.js huawei signing-env --help > /dev/null
           node src/publish-apk.js google --help > /dev/null
           node src/publish-apk.js google access-token --help > /dev/null
           node src/publish-apk.js google upload-aab --help > /dev/null
@@ -305,6 +306,31 @@ jobs:
           grep -Eq '"storePassword"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' "$tmp/passwords-profile.json5"
           grep -q '^keyPassword: 已补充$' "$tmp/passwords.txt"
           grep -q '^storePassword: 已补充$' "$tmp/passwords.txt"
+
+          # signing-env：从 material 解出口令并导出 CI 变量
+          node src/publish-apk.js huawei signing-env \
+            --config "$tmp/passwords-profile.json5" --name default --format json \
+            > "$tmp/signing-env-out.json" 2> "$tmp/signing-env.err"
+          node -e '
+            const fs = require("node:fs");
+            const v = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            const keys = [
+              "HARMONY_STORE_FILE_BASE64",
+              "HARMONY_PROFILE_BASE64",
+              "HARMONY_CERTPATH_BASE64",
+              "HARMONY_STORE_PASSWORD",
+              "HARMONY_KEY_PASSWORD",
+              "HARMONY_KEY_ALIAS",
+              "HARMONY_SIGN_ALG",
+            ];
+            for (const key of keys) {
+              if (!v[key]) throw new Error("missing " + key);
+            }
+            if (v.HARMONY_KEY_ALIAS !== "smoke") throw new Error("bad alias");
+            if (v.HARMONY_STORE_PASSWORD !== "smoke") throw new Error("bad password");
+            Buffer.from(v.HARMONY_STORE_FILE_BASE64, "base64");
+          ' "$tmp/signing-env-out.json"
+
 
           # signing-material-env：HARMONY_* 先校验再替换 material
           cat > "$tmp/material-env.json5" <<EOF

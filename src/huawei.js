@@ -80,7 +80,13 @@ import {
   normalizePemText,
   signJwt,
 } from './jwt.js'
-import { runHuaweiSigningConfig, runHuaweiSigningMaterial, runHuaweiSigningMaterialEnv, runHuaweiSigningPasswords } from './huawei-signing.js'
+import {
+  runHuaweiSigningConfig,
+  runHuaweiSigningEnv,
+  runHuaweiSigningMaterial,
+  runHuaweiSigningMaterialEnv,
+  runHuaweiSigningPasswords,
+} from './huawei-signing.js'
 
 // ---------------------------------------------------------------- JWT 固定值
 
@@ -2437,6 +2443,7 @@ function renderHuaweiHelp() {
           ['signing-passwords', '只补充 build-profile.json5 的 keyPassword / storePassword'],
           ['signing-material', '替换 build-profile.json5 的 material 字段'],
           ['signing-material-env', '用 HARMONY_* 环境变量校验并替换 material'],
+          ['signing-env', '按产品导出鸿蒙签名 CI 环境变量'],
           ['help', '显示帮助信息'],
         ],
       },
@@ -3290,6 +3297,9 @@ async function runHuawei(argv, env) {
   }
   if (command === 'signing-material-env') {
     return runHuaweiSigningMaterialEnv(rest, env)
+  }
+  if (command === 'signing-env') {
+    return runHuaweiSigningEnv(rest, env)
   }
   throw new UsageError(`未知命令 "huawei ${command}"`, renderHuaweiHelp())
 }

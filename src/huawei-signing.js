@@ -44,6 +44,7 @@ const COMMAND_NAME = 'signing-config'
 const PASSWORDS_COMMAND_NAME = 'signing-passwords'
 const MATERIAL_COMMAND_NAME = 'signing-material'
 const MATERIAL_ENV_COMMAND_NAME = 'signing-material-env'
+const ENV_COMMAND_NAME = 'signing-env'
 
 const OPTION_STORE_FILE = '--store-file'
 const OPTION_STORE_FILE_OUT = '--store-file-out'
@@ -65,6 +66,8 @@ const OPTION_NEW_MATERIAL = '--new-material'
 const OPTION_NO_KEYTOOL = '--no-keytool'
 /** signing-material-env：要求 store / cert / profile / 口令齐全 */
 const OPTION_REQUIRE_ALL = '--require-all'
+const OPTION_FORMAT = '--format'
+const OPTION_SEPARATOR = '--separator'
 const OPTION_VERBOSE = '--verbose'
 
 const SIGNING_OPTIONS = new Set([
@@ -124,6 +127,9 @@ const MATERIAL_ENV_OPTIONS = new Set([
   OPTION_REQUIRE_ALL,
 ])
 const MATERIAL_ENV_FLAGS = new Set([OPTION_NO_KEYTOOL, OPTION_NEW_MATERIAL, OPTION_REQUIRE_ALL])
+
+const ENV_OPTIONS = new Set([OPTION_CONFIG, OPTION_PRODUCT, OPTION_NAME, OPTION_FORMAT, OPTION_SEPARATOR])
+const ENV_FLAGS = new Set()
 
 const ENV_STORE_FILE = 'HARMONY_STORE_FILE'
 const ENV_STORE_FILE_BASE64 = 'HARMONY_STORE_FILE_BASE64'
@@ -698,6 +704,74 @@ function renderSigningMaterialEnvHelp() {
       '说明: 有 HARMONY_STORE_PASSWORD 时按 .p12 同级 material/ 加密并同时更新两串口令',
       '说明: 只给 HARMONY_KEY_PASSWORD 时需要同时给 HARMONY_STORE_PASSWORD 才能校验 / 加密',
       '说明: 写回前备份到 .signing/backup/，写后回读校验',
+    ],
+  })
+}
+
+function renderSigningEnvHelp() {
+  return renderHelp({
+    title: `${PROGRAM} huawei ${ENV_COMMAND_NAME} - 导出鸿蒙签名 CI 变量`,
+    usage: [`${PROGRAM} huawei ${ENV_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '作用',
+        entries: [
+          [
+            '输入',
+            '按 build-profile.json5 的 product / signingConfig 读取 material、p12、证书、Profile 与密文口令',
+          ],
+          [
+            '输出',
+            'HARMONY_STORE_FILE_BASE64 / HARMONY_PROFILE_BASE64 / HARMONY_CERTPATH_BASE64 / HARMONY_STORE_PASSWORD / HARMONY_KEY_PASSWORD / HARMONY_KEY_ALIAS / HARMONY_SIGN_ALG',
+          ],
+        ],
+      },
+      {
+        title: '选项',
+        entries: [
+          [
+            `${OPTION_CONFIG} <文件>`,
+            `build-profile.json5 路径，默认 ./${DEFAULT_CONFIG}（可用 ${ENV_CONFIG} 补齐）`,
+          ],
+          [`${OPTION_PRODUCT} <产品>`, `按 products[].name 找到它挂的 signingConfig（可用 ${ENV_PRODUCT} 补齐）`],
+          [`${OPTION_NAME} <名字>`, `不按产品时直接指定 signingConfig，默认 ${DEFAULT_NAME}（可用 ${ENV_NAME} 补齐）`],
+          [OPTION_FORMAT, '输出格式：env（默认）/ shell / json'],
+          [OPTION_SEPARATOR, 'env 输出的分隔符：默认 =；可设为 :'],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_CONFIG, `等价于 ${OPTION_CONFIG}`],
+          [ENV_PRODUCT, `等价于 ${OPTION_PRODUCT}`],
+          [ENV_NAME, `等价于 ${OPTION_NAME}`],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          ['stdout', '七个 HARMONY_* 变量（BASE64 单行；口令为明文）'],
+          ['stderr', '明文口令警告与错误信息'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '成功'],
+          ['1', '配置 / 产品 / material / 文件校验失败或口令解密失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --product prod`,
+      `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --product prod --format shell`,
+      `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --name default --format json`,
+      '',
+      '警告: stdout 包含明文口令，不要写入日志、提交仓库或公开分享',
+      '说明: material 必须与 material.storeFile 指向的 .p12 同级；本命令只读不写',
+      '说明: p12 / 证书 / Profile 必须存在，口令必须能用 material 解密',
     ],
   })
 }
@@ -1954,6 +2028,132 @@ export async function runHuaweiSigningMaterialEnv(argv, env) {
   lines.push(`备份: ${backup}`)
   stderr(`已用环境变量替换 ${targetName} 的 material 字段；备份在 ${backup}`)
   stdout(lines.join('\n'))
+  return EXIT_OK
+}
+
+/** shell 单引号安全引用 */
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`
+}
+
+/** env 格式的值加双引号，并转义会破坏 shell / dotenv 的字符 */
+function quoteEnvValue(value) {
+  return `"${String(value)
+    .replaceAll('\\', '\\\\')
+    .replaceAll('"', '\\"')
+    .replaceAll('$', '\\$')
+    .replaceAll('`', '\\`')}"`
+}
+
+/** 读文件并转单行 BASE64；文件不存在直接报错 */
+function fileBase64(file, label, help) {
+  if (!fs.existsSync(file)) {
+    throw new UsageError(`${label} 不存在: ${file}`, help)
+  }
+  if (!fs.statSync(file).isFile()) {
+    throw new UsageError(`${label} 不是普通文件: ${file}`, help)
+  }
+  return fs.readFileSync(file).toString('base64')
+}
+
+/** 导出 build-profile.json5 对应产品的 CI 变量 */
+export function runHuaweiSigningEnv(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderSigningEnvHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(argv, ENV_OPTIONS, renderSigningEnvHelp, ENV_FLAGS)
+  const configFile = path.resolve(
+    options.get(OPTION_CONFIG) ?? readEnv(env, ENV_CONFIG) ?? DEFAULT_CONFIG,
+  )
+  if (!fs.existsSync(configFile)) {
+    throw new UsageError(`build-profile.json5 不存在: ${configFile}`, renderSigningEnvHelp())
+  }
+  const configText = fs.readFileSync(configFile, 'utf8')
+  const productName = options.get(OPTION_PRODUCT) ?? readEnv(env, ENV_PRODUCT)
+  const name = options.get(OPTION_NAME) ?? readEnv(env, ENV_NAME)
+  const { entry, name: targetName } = selectSigningConfig(
+    configText,
+    productName,
+    name,
+    renderSigningEnvHelp(),
+  )
+
+  const values = {}
+  for (const key of [
+    'storeFile',
+    'certpath',
+    'profile',
+    'storePassword',
+    'keyPassword',
+    'keyAlias',
+    'signAlg',
+  ]) {
+    const value = stringField(entry.text, key)
+    if (value === undefined || value.trim() === '') {
+      throw new UsageError(
+        `签名配置 ${targetName} 的 material.${key} 为空；请先用 signing-config 生成完整配置`,
+        renderSigningEnvHelp(),
+      )
+    }
+    values[key] = value
+  }
+
+  const configDir = path.dirname(configFile)
+  const storeFile = path.resolve(configDir, values.storeFile)
+  const certpath = path.resolve(configDir, values.certpath)
+  const profile = path.resolve(configDir, values.profile)
+  const materialDir = path.join(path.dirname(storeFile), 'material')
+  let storePassword
+  let keyPassword
+  try {
+    storePassword = decryptSecret(materialDir, values.storePassword, 'storePassword')
+    keyPassword = decryptSecret(materialDir, values.keyPassword, 'keyPassword')
+  } catch (error) {
+    throw new UsageError(`material 口令解密失败: ${error.message}`, renderSigningEnvHelp())
+  }
+  for (const [label, value] of [
+    ['storePassword', storePassword],
+    ['keyPassword', keyPassword],
+  ]) {
+    if (/[\r\n\0]/.test(value)) {
+      throw new UsageError(`${label} 包含换行或 NUL 字符，无法导出为环境变量`, renderSigningEnvHelp())
+    }
+  }
+
+  const variables = [
+    ['HARMONY_STORE_FILE_BASE64', fileBase64(storeFile, '.p12', renderSigningEnvHelp())],
+    ['HARMONY_PROFILE_BASE64', fileBase64(profile, 'Profile', renderSigningEnvHelp())],
+    ['HARMONY_CERTPATH_BASE64', fileBase64(certpath, '证书', renderSigningEnvHelp())],
+    ['HARMONY_STORE_PASSWORD', storePassword],
+    ['HARMONY_KEY_PASSWORD', keyPassword],
+    ['HARMONY_KEY_ALIAS', values.keyAlias],
+    ['HARMONY_SIGN_ALG', values.signAlg],
+  ]
+
+  const format = String(options.get(OPTION_FORMAT) ?? 'env').trim().toLowerCase()
+  const separator = options.get(OPTION_SEPARATOR)
+  if (separator !== undefined && format !== 'env') {
+    throw new UsageError(`--separator 只用于 env 格式；当前是 ${format}`, renderSigningEnvHelp())
+  }
+  if (separator !== undefined && separator !== '=' && separator !== ':') {
+    throw new UsageError(`--separator 只支持 = 或 :，实际: ${separator}`, renderSigningEnvHelp())
+  }
+  const between = separator === ':' ? ': ' : '='
+  let output
+  if (format === 'env') {
+    output = variables.map(([key, value]) => `${key}${between}${quoteEnvValue(value)}`).join('\n')
+  } else if (format === 'shell') {
+    output = variables.map(([key, value]) => `export ${key}=${shellQuote(value)}`).join('\n')
+  } else if (format === 'json') {
+    output = JSON.stringify(Object.fromEntries(variables), null, 2)
+  } else {
+    throw new UsageError(`不支持的输出格式: ${format}（仅支持 env / shell / json）`, renderSigningEnvHelp())
+  }
+
+  stderr('警告: stdout 包含明文口令，请勿写入日志、提交仓库或公开分享')
+  stdout(output)
   return EXIT_OK
 }
 
