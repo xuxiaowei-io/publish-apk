@@ -44,6 +44,10 @@ const ENV_FILE = 'HAP_FILE'
 /** 开关：输出全部字段，等价于 --verbose */
 const ENV_VERBOSE = 'HAP_VERBOSE'
 
+/** app 命令的文件与开关环境变量 */
+const ENV_APP_FILE = 'APP_FILE'
+const ENV_APP_VERBOSE = 'APP_VERBOSE'
+
 const VERBOSE_ON_VALUES = new Set(['1', 'true', 'yes', 'on'])
 const VERBOSE_OFF_VALUES = new Set(['0', 'false', 'no', 'off'])
 
@@ -70,11 +74,11 @@ const SIGN_BLOCK_TYPES = new Map([
 // -------------------------------------------------------------- 开关型参数
 
 /** 解析 --verbose / HAP_VERBOSE */
-function resolveVerbose(options, env, help) {
+function resolveVerbose(options, env, help, envName = ENV_VERBOSE) {
   if (options.get(OPTION_VERBOSE) === true) {
     return true
   }
-  const value = readEnv(env, ENV_VERBOSE)
+  const value = readEnv(env, envName)
   if (value === undefined) {
     return false
   }
@@ -86,7 +90,7 @@ function resolveVerbose(options, env, help) {
     return false
   }
   throw new UsageError(
-    `环境变量 ${ENV_VERBOSE} 的值无效: "${value}"（开启用 1/true/yes/on，关闭用 0/false/no/off）`,
+    `环境变量 ${envName} 的值无效: "${value}"（开启用 1/true/yes/on，关闭用 0/false/no/off）`,
     help(),
   )
 }
@@ -142,6 +146,59 @@ function renderHapHelp() {
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
       '说明: signed / unsigned 的包内容通常相同，区别在是否带 HAP 签名块',
       '说明: 不输出证书 PEM 原文；HAP 里没有私钥',
+    ],
+  })
+}
+
+function renderAppHelp() {
+  return renderHelp({
+    title: `${PROGRAM} app - 查看 APP 安装包信息`,
+    usage: [`${PROGRAM} app [选项]`],
+    sections: [
+      {
+        title: '选项',
+        entries: [
+          [`${OPTION_FILE} <路径>`, `APP 文件路径，必填（可用 ${ENV_APP_FILE} 补齐）`],
+          [
+            OPTION_VERBOSE,
+            `输出全部字段（ZIP 条目、签名子块、全部签名证书链、完整 pack.info / pac.json）；命令行未给出时读取 ${ENV_APP_VERBOSE}`,
+          ],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_APP_FILE, `APP 文件路径，等价于 ${OPTION_FILE}`],
+          [ENV_APP_VERBOSE, '输出全部字段，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          ['stdout', 'APP 包信息、内层模块与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与原始 JSON'],
+          ['stderr', '错误信息'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '成功'],
+          ['1', '参数缺失、参数错误或文件读取 / 解析失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${PROGRAM} app --file ./app-signed.app`,
+      `  ${PROGRAM} app --file ./app-unsigned.app --verbose`,
+      `  ${ENV_APP_FILE}=./app.app ${PROGRAM} app`,
+      `  ${ENV_APP_VERBOSE}=1 ${PROGRAM} app --file ./app.app`,
+      '',
+      '说明: APP 是 ZIP，含 pac.json、pack.info 与一个或多个内层 .hap / .hsp；本命令读取外层信息',
+      '说明: 签名块在外层，内层 HAP 可能没有单独签名；签名证书从外层 PKCS#7 提取，未执行验签',
+      '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
+      '说明: 不输出证书 PEM 原文；APP 里没有私钥',
     ],
   })
 }
@@ -381,21 +438,22 @@ function readHapSignature(buffer, centralOffset) {
 }
 
 /** 签名块状态文案 */
-function signatureLabel(signature) {
+function signatureLabel(signature, kind = 'HAP') {
+  const blockName = kind === 'APP' ? 'APP 签名块' : 'HAP 签名块'
   if (signature === null) {
-    return '未签名（未检测到 HAP 签名块）'
+    return `未签名（未检测到 ${blockName}）`
   }
   if (signature.fallback) {
-    return '已签名（检测到 Code Sign Block；未验签）'
+    return `已签名（检测到 ${kind} Code Sign Block；未验签）`
   }
   if (signature.invalid) {
-    return '已签名（HAP 签名块头异常；未验签）'
+    return `已签名（${blockName}头异常；未验签）`
   }
   const version =
     signature.version === undefined || signature.version === null
       ? ''
       : ` v${signature.version}`
-  return `已签名（HAP 签名块${version}，${signature.count} 个子块；未验签）`
+  return `已签名（${blockName}${version}，${signature.count} 个子块；未验签）`
 }
 
 /** 从 HAP 签名块里的 PKCS#7 子块提取证书链 */
@@ -516,7 +574,20 @@ function formatBytes(size) {
   return index === 0 ? `${size} B` : `${value.toFixed(1)} ${units[index]}`
 }
 
-function renderHap(path, size, entries, pack, moduleJson, signature, certificateGroups, verbose) {
+function renderHap(
+  path,
+  size,
+  entries,
+  pack,
+  moduleJson,
+  signature,
+  certificateGroups,
+  verbose,
+  options = {},
+) {
+  const kind = options.kind ?? 'HAP'
+  const pac = options.pac ?? null
+  const innerModules = options.innerModules ?? []
   const summary = pack?.summary ?? {}
   const packApp = summary.app ?? {}
   const packVersion = packApp.version ?? {}
@@ -561,8 +632,8 @@ function renderHap(path, size, entries, pack, moduleJson, signature, certificate
   const lines = [
     `文件: ${path}`,
     `大小: ${formatBytes(size)}（${size} 字节）`,
-    `格式: HAP / ZIP（${entries.length} 个条目）`,
-    `签名: ${signatureLabel(signature)}`,
+    `格式: ${kind} / ZIP（${entries.length} 个条目）`,
+    `签名: ${signatureLabel(signature, kind)}`,
   ]
 
   if (bundleName !== undefined) {
@@ -628,6 +699,16 @@ function renderHap(path, size, entries, pack, moduleJson, signature, certificate
   if (permissions.length > 0) {
     lines.push(`权限: ${permissions.join('、')}`)
   }
+  if (kind === 'APP') {
+    for (const item of innerModules) {
+      lines.push(`内层模块: ${item.name}（${formatBytes(item.size)}）`)
+    }
+    if (pac !== null) {
+      const dataProcess = values(pac.dataProcess).length
+      const specialApis = values(pac.specialAPIs).length
+      lines.push(`pac.json: 数据处理 ${dataProcess} 项、特殊 API ${specialApis} 项`)
+    }
+  }
   addSignatureCertificates(lines, certificateGroups, verbose)
   if (signature !== null && certificateGroups.length === 0) {
     lines.push('', '签名证书: 未解析到证书（仅检测到签名块）')
@@ -677,6 +758,9 @@ function renderHap(path, size, entries, pack, moduleJson, signature, certificate
     if (moduleJson !== null) {
       lines.push(`module.json: ${JSON.stringify(moduleJson)}`)
     }
+    if (pac !== null) {
+      lines.push(`pac.json: ${JSON.stringify(pac)}`)
+    }
   }
 
   return lines.join('\n')
@@ -698,6 +782,23 @@ function parseHap(buffer, path, help) {
   }
   const signature = readHapSignature(buffer, eocd.centralOffset)
   return { entries, pack, moduleJson, signature }
+}
+
+/** 按 APP 文件读取外层 ZIP、pack.info、pac.json、内层模块与签名块 */
+function parseApp(buffer, path, help) {
+  const eocd = readEndOfCentralDirectory(buffer, help)
+  const entries = readZipEntries(buffer, eocd, help)
+  const pack = readJsonEntry(buffer, entries, 'pack.info', help)
+  const pac = readJsonEntry(buffer, entries, 'pac.json', help)
+  if (pack === null && pac === null) {
+    throw new UsageError(
+      `不是 APP：${path} 里没有 pack.info 或 pac.json`,
+      help(),
+    )
+  }
+  const innerModules = entries.filter((entry) => /\.(hap|hsp)$/i.test(entry.name))
+  const signature = readHapSignature(buffer, eocd.centralOffset)
+  return { entries, pack, pac, innerModules, signature }
 }
 
 function readHapFile(path, help) {
@@ -743,6 +844,48 @@ function runHap(argv, env) {
     ),
   )
   return EXIT_OK
+}
+
+function runApp(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderAppHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(argv, HAP_OPTIONS, renderAppHelp, HAP_FLAGS)
+  const verbose = resolveVerbose(options, env, renderAppHelp, ENV_APP_VERBOSE)
+  const path = options.get(OPTION_FILE) ?? readEnv(env, ENV_APP_FILE)
+  if (path === undefined) {
+    throw new UsageError(
+      `缺少必填参数: ${OPTION_FILE}（APP 文件路径），可用环境变量 ${ENV_APP_FILE}`,
+      renderAppHelp(),
+    )
+  }
+
+  const buffer = readHapFile(path, renderAppHelp)
+  const parsed = parseApp(buffer, path, renderAppHelp)
+  const certificateGroups = collectHapSignatureCertificates(parsed.signature, buffer)
+  stdout(
+    renderHap(
+      path,
+      buffer.length,
+      parsed.entries,
+      parsed.pack,
+      null,
+      parsed.signature,
+      certificateGroups,
+      verbose,
+      { kind: 'APP', pac: parsed.pac, innerModules: parsed.innerModules },
+    ),
+  )
+  return EXIT_OK
+}
+
+/** app 命令描述，由 publish-apk.js 注册到根命令表 */
+export const appCommand = {
+  name: 'app',
+  summary: '查看 APP 安装包信息（包名 / 版本 / 内层模块 / 签名）',
+  run: runApp,
 }
 
 /** hap 命令描述，由 publish-apk.js 注册到根命令表 */

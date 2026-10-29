@@ -43,6 +43,7 @@ jobs:
           node src/publish-apk.js cert --help > /dev/null
           node src/publish-apk.js profile --help > /dev/null
           node src/publish-apk.js hap --help > /dev/null
+          node src/publish-apk.js app --help > /dev/null
           node src/publish-apk.js huawei --help > /dev/null
           node src/publish-apk.js huawei service-account --help > /dev/null
           node src/publish-apk.js huawei service-account-upload-url --help > /dev/null
@@ -161,6 +162,29 @@ jobs:
           grep -q '^签名: 未签名' "$tmp/hap.txt"
           node src/publish-apk.js hap --file "$tmp/smoke.hap" --verbose > /dev/null
           HAP_FILE="$tmp/smoke.hap" node src/publish-apk.js hap > /dev/null
+
+          # APP：外层 ZIP 内含 pac.json / pack.info / entry-default.hap
+          python3 - "$tmp/smoke.app" "$tmp/smoke.hap" <<'PY'
+          import json
+          import sys
+          import zipfile
+
+          app, hap = sys.argv[1], sys.argv[2]
+          with zipfile.ZipFile(hap) as archive:
+              pack = json.loads(archive.read("pack.info"))
+          with zipfile.ZipFile(app, "w", zipfile.ZIP_DEFLATED) as archive:
+              archive.writestr("pac.json", json.dumps({"dataProcess": [], "specialAPIs": []}))
+              archive.writestr("pack.info", json.dumps(pack))
+              archive.write(hap, "entry-default.hap")
+          PY
+          node src/publish-apk.js app --file "$tmp/smoke.app" > "$tmp/app.txt"
+          grep -q '^格式: APP / ZIP（3 个条目）$' "$tmp/app.txt"
+          grep -q '^包名: com.example.smoke$' "$tmp/app.txt"
+          grep -q '^内层模块: entry-default.hap' "$tmp/app.txt"
+          grep -q '^pac.json: 数据处理 0 项、特殊 API 0 项$' "$tmp/app.txt"
+          grep -q '^签名: 未签名' "$tmp/app.txt"
+          node src/publish-apk.js app --file "$tmp/smoke.app" --verbose > /dev/null
+          APP_FILE="$tmp/smoke.app" node src/publish-apk.js app > /dev/null
 
           # signing-config：material 生成 + 两串密文口令；不依赖 JDK
           HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \

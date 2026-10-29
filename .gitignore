@@ -46,3 +46,4 @@ build/
 material/
 
 *.hap
+*.app

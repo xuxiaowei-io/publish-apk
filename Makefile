@@ -71,6 +71,11 @@ SHELL := /usr/bin/env bash
 #   HAP_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   HAP_ARGS      追加到 hap 命令末尾的额外参数，例如 HAP_ARGS="--verbose"
 #
+# APP 安装包查看可选变量（与厂商无关）：
+#   APP_FILE      APP 文件路径，等价于 app 的 --file（必填，没有默认文件）
+#   APP_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
+#   APP_ARGS      追加到 app 命令末尾的额外参数，例如 APP_ARGS="--verbose"
+#
 # 鸿蒙签名配置可选变量（与命令读取的 HARMONY_* 环境变量同名）：
 #   HARMONY_STORE_FILE / HARMONY_PROFILE
 #                     p12 / p7b 路径；两者也接受 BASE64，等价于 --store-file / --profile
@@ -141,6 +146,9 @@ PROFILE_ARGS ?=
 HAP_FILE ?=
 HAP_VERBOSE ?=
 HAP_ARGS ?=
+APP_FILE ?=
+APP_VERBOSE ?=
+APP_ARGS ?=
 HARMONY_STORE_FILE ?=
 HARMONY_STORE_FILE_OUT ?=
 HARMONY_CERTPATH ?=
@@ -170,6 +178,9 @@ profileOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 # HAP 变量使用同一套转发规则
 hapOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
+# APP 变量使用同一套转发规则
+appOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
 # 鸿蒙签名配置变量使用同一套转发规则（口令不在其中：只走环境变量或交互输入）
 harmonyOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
@@ -185,6 +196,9 @@ PROFILE_FILE_ARGS = $(call profileOption,PROFILE_FILE,--file)
 
 # 组合 hap 的参数：HAP_FILE 只在 make 命令行给出时转成 --file
 HAP_FILE_ARGS = $(call hapOption,HAP_FILE,--file)
+
+# 组合 app 的参数：APP_FILE 只在 make 命令行给出时转成 --file
+APP_FILE_ARGS = $(call appOption,APP_FILE,--file)
 
 # 组合 huawei service-account 的参数：命令行给哪个变量就转哪个选项，都不给则完全回退环境变量
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
@@ -278,6 +292,12 @@ hap-help: ## 查看 HAP 安装包帮助文档
 
 hap: ## 查看 HAP 安装包信息（HAP_FILE 必填；HAP_VERBOSE 输出全部字段）
 	@node src/publish-apk.js hap $(HAP_FILE_ARGS) $(HAP_ARGS)
+
+app-help: ## 查看 APP 安装包帮助文档
+	node src/publish-apk.js app --help
+
+app: ## 查看 APP 安装包信息（APP_FILE 必填；APP_VERBOSE 输出全部字段）
+	@node src/publish-apk.js app $(APP_FILE_ARGS) $(APP_ARGS)
 
 # ------------------------------------------------------------------- 华为
 
