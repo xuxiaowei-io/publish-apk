@@ -41,6 +41,7 @@ const OPTION_FILE = '--file'
 const OPTION_VERBOSE = '--verbose'
 const APK_OPTIONS = new Set([OPTION_FILE, OPTION_VERBOSE])
 const APK_FLAGS = new Set([OPTION_VERBOSE])
+const APK_MULTI_OPTIONS = new Set([OPTION_FILE])
 
 const ENV_FILE = 'APK_FILE'
 const ENV_VERBOSE = 'APK_VERBOSE'
@@ -109,7 +110,7 @@ function renderApkHelp() {
       {
         title: '选项',
         entries: [
-          [`${OPTION_FILE} <路径>`, `APK 文件路径，必填（可用 ${ENV_FILE} 补齐）`],
+          [`${OPTION_FILE} <路径...>`, `一个或多个 APK 文件路径（支持 shell glob），必填（可用 ${ENV_FILE} 补齐）`],
           [
             OPTION_VERBOSE,
             `输出全部字段（ZIP 条目、签名块 pair、完整证书链、全部权限 / Activity）；命令行未给出时读取 ${ENV_VERBOSE}`,
@@ -146,6 +147,7 @@ function renderApkHelp() {
       `  ${ENV_FILE}=./app.apk ${PROGRAM} ${COMMAND_NAME}`,
       `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./app.apk`,
       '',
+      '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: AndroidManifest.xml 是二进制 XML；本命令直接解析，不依赖 aapt / apkanalyzer',
       '说明: 签名只检测 JAR v1 与 APK Signature Scheme v2 / v3 / v3.1，未执行证书链与摘要验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
@@ -638,30 +640,50 @@ function runApk(argv, env) {
     return EXIT_OK
   }
 
-  const options = parseOptions(argv, APK_OPTIONS, renderApkHelp, APK_FLAGS)
+  const options = parseOptions(
+    argv,
+    APK_OPTIONS,
+    renderApkHelp,
+    APK_FLAGS,
+    APK_MULTI_OPTIONS,
+  )
   const verbose = resolveVerbose(options, env, renderApkHelp)
-  const path = options.get(OPTION_FILE) ?? readEnv(env, ENV_FILE)
-  if (path === undefined) {
+  const envPath = readEnv(env, ENV_FILE)
+  const optionPaths = options.get(OPTION_FILE)
+  const paths =
+    optionPaths === undefined
+      ? envPath === undefined
+        ? undefined
+        : [envPath]
+      : Array.isArray(optionPaths)
+        ? optionPaths
+        : [optionPaths]
+  if (paths === undefined) {
     throw new UsageError(
-      `缺少必填参数: ${OPTION_FILE}（APK 文件路径），可用环境变量 ${ENV_FILE}`,
+      `缺少必填参数: ${OPTION_FILE}（APK 文件路径，可多个），可用环境变量 ${ENV_FILE}`,
       renderApkHelp(),
     )
   }
 
-  const buffer = readApkFile(path, renderApkHelp)
-  const parsed = parseApk(buffer, path, renderApkHelp)
-  const { lines, certificateGroups } = apkLines(
-    buffer,
-    path,
-    parsed.entries,
-    parsed.manifest,
-    parsed.signing,
-    verbose,
-  )
-  if (verbose) {
-    verboseLines(lines, parsed.entries, parsed.manifest, parsed.signing)
+  for (const [index, path] of paths.entries()) {
+    const buffer = readApkFile(path, renderApkHelp)
+    const parsed = parseApk(buffer, path, renderApkHelp)
+    const { lines } = apkLines(
+      buffer,
+      path,
+      parsed.entries,
+      parsed.manifest,
+      parsed.signing,
+      verbose,
+    )
+    if (verbose) {
+      verboseLines(lines, parsed.entries, parsed.manifest, parsed.signing)
+    }
+    stdout(lines.join('\n'))
+    if (index < paths.length - 1) {
+      stdout('')
+    }
   }
-  stdout(lines.join('\n'))
   return EXIT_OK
 }
 

@@ -58,8 +58,11 @@ publish-apk cert --file ./certpath.cer                    # 查看证书
 publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 密钥库
 publish-apk profile --file ./profile.p7b                  # 查看 P7B Provisioning Profile
 publish-apk hap --file ./app-signed.hap                    # 查看 HAP 安装包信息
+publish-apk hap --file ./*.hap                             # 一次查看多个 HAP
 publish-apk app --file ./app-signed.app                    # 查看 APP 安装包信息
+publish-apk app --file ./*.app                             # 一次查看多个 APP
 publish-apk apk --file ./app-arm64-v8a-release.apk        # 查看 APK 安装包信息
+publish-apk apk --file ./*.apk                             # 一次查看多个 APK
 publish-apk huawei                # huawei 子命令帮助
 publish-apk huawei <命令> --help   # 某个子命令的帮助文档
 publish-apk google                # google 子命令帮助
@@ -139,11 +142,13 @@ HAP 是 HarmonyOS 的安装包，本质是 ZIP：`pack.info` / `module.json` 记
 
 ```bash
 publish-apk hap --file ./app-signed.hap            # signed / unsigned 都适用
+publish-apk hap --file ./*.hap                     # 一次查看多个 HAP，按顺序输出
 publish-apk hap --file ./app-unsigned.hap --verbose
 HAP_FILE=./app.hap publish-apk hap                 # 环境变量形式
 HAP_VERBOSE=1 publish-apk hap --file ./app.hap
 ```
 
+- `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.hap`）；按参数顺序逐个输出，文件之间空一行。
 - 默认输出：文件大小、ZIP 条目数、签名状态、包名、包类型、版本 / 构建号、模块、设备、主 Ability、
   API 兼容 / 目标版本、安装方式、构建模式、调试开关、权限，以及签名证书（HAP 签名方案与 Profile 签名各取叶子证书）。
 - `--verbose` / `HAP_VERBOSE=1` 追加：应用标签、厂商、编译 SDK、模块包名，
@@ -164,11 +169,13 @@ APP 是 HarmonyOS 的 App Pack，本质也是 ZIP：外层有 `pack.info`、`pac
 
 ```bash
 publish-apk app --file ./app-signed.app            # signed / unsigned 都适用
+publish-apk app --file ./*.app                     # 一次查看多个 APP，按顺序输出
 publish-apk app --file ./app-unsigned.app --verbose
 APP_FILE=./app.app publish-apk app                 # 环境变量形式
 APP_VERBOSE=1 publish-apk app --file ./app.app
 ```
 
+- `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.app`）；按参数顺序逐个输出，文件之间空一行。
 - 默认输出：文件大小、ZIP 条目数、外层签名状态、包名、包类型、版本 / 构建号、模块、设备、
   主 Ability、API 兼容 / 目标版本、安装方式、构建模式、调试开关、权限、内层模块列表，
   以及外层签名证书（HAP 签名方案与 Profile 签名各取叶子证书）。
@@ -188,11 +195,13 @@ APK 是 Android 安装包，本质也是 ZIP：`AndroidManifest.xml` 是 Android
 
 ```bash
 publish-apk apk --file ./app-arm64-v8a-release.apk
+publish-apk apk --file ./*.apk                     # 一次查看多个 APK，按顺序输出
 publish-apk apk --file ./app-armeabi-v7a-release.apk --verbose
 APK_FILE=./app.apk publish-apk apk
 APK_VERBOSE=1 publish-apk apk --file ./app.apk
 ```
 
+- `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.apk`）；按参数顺序逐个输出，文件之间空一行。
 - 默认输出：文件大小、ZIP 条目数、签名状态与签名方案、包名、版本 / versionCode、
   Min / Target / 编译 SDK、ABI、DEX 数量、权限、启动 Activity，以及签名证书（叶子证书）。
 - `--verbose` / `APK_VERBOSE=1` 追加：应用标签、允许备份、uses-feature、全部 Activity，

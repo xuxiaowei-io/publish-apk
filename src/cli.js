@@ -128,9 +128,10 @@ export function readEnv(env, name) {
  * @param {Set<string>} allowed 该命令允许的全部选项名（含开关）
  * @param {() => string} help 出错时附带的帮助文档（传函数是为了不在正常路径上白渲染）
  * @param {Set<string>} [flags] 开关型选项名，不接收参数值
- * @returns {Map<string, string | true>} 选项名 → 值（开关为 true）
+ * @param {Set<string>} [multi] 可重复、可跟多个连续值的选项名（如 --file a b c）
+ * @returns {Map<string, string | string[] | true>} 选项名 → 值（开关为 true；multi 为数组）
  */
-export function parseOptions(argv, allowed, help, flags = new Set()) {
+export function parseOptions(argv, allowed, help, flags = new Set(), multi = new Set()) {
   const options = new Map()
   for (let index = 0; index < argv.length; index += 1) {
     const token = argv[index]
@@ -140,7 +141,7 @@ export function parseOptions(argv, allowed, help, flags = new Set()) {
       const kind = token.startsWith('-') ? '选项' : '参数'
       throw new UsageError(`未知${kind} "${redactToken(token)}"`, help())
     }
-    if (options.has(name)) {
+    if (options.has(name) && !multi.has(name)) {
       throw new UsageError(`选项 "${name}" 重复指定`, help())
     }
 
@@ -153,18 +154,32 @@ export function parseOptions(argv, allowed, help, flags = new Set()) {
       continue
     }
 
-    let value = inlineValue
-    if (value === undefined) {
-      value = argv[index + 1]
+    const values = []
+    if (inlineValue !== undefined) {
+      values.push(inlineValue)
+    } else {
+      const value = argv[index + 1]
       if (value === undefined || looksLikeOption(value)) {
         throw new UsageError(`选项 "${name}" 缺少参数值`, help())
       }
+      values.push(value)
       index += 1
     }
-    if (value === '') {
+    if (multi.has(name)) {
+      while (index + 1 < argv.length && !looksLikeOption(argv[index + 1])) {
+        values.push(argv[index + 1])
+        index += 1
+      }
+    }
+    if (values.some((value) => value === '')) {
       throw new UsageError(`选项 "${name}" 的值不能为空`, help())
     }
-    options.set(name, value)
+    if (multi.has(name)) {
+      const previous = options.get(name)
+      options.set(name, previous === undefined ? values : [...previous, ...values])
+    } else {
+      options.set(name, values[0])
+    }
   }
   return options
 }

@@ -163,6 +163,8 @@ jobs:
           grep -q '^签名: 未签名' "$tmp/hap.txt"
           node src/publish-apk.js hap --file "$tmp/smoke.hap" --verbose > /dev/null
           HAP_FILE="$tmp/smoke.hap" node src/publish-apk.js hap > /dev/null
+          node src/publish-apk.js hap --file "$tmp/smoke.hap" "$tmp/smoke.hap" > "$tmp/hap-multi.txt"
+          test "$(grep -c '^文件:' "$tmp/hap-multi.txt")" -eq 2
 
           # APP：外层 ZIP 内含 pac.json / pack.info / entry-default.hap
           python3 - "$tmp/smoke.app" "$tmp/smoke.hap" <<'PY'
@@ -186,6 +188,8 @@ jobs:
           grep -q '^签名: 未签名' "$tmp/app.txt"
           node src/publish-apk.js app --file "$tmp/smoke.app" --verbose > /dev/null
           APP_FILE="$tmp/smoke.app" node src/publish-apk.js app > /dev/null
+          node src/publish-apk.js app --file "$tmp/smoke.app" "$tmp/smoke.app" > "$tmp/app-multi.txt"
+          test "$(grep -c '^文件:' "$tmp/app-multi.txt")" -eq 2
 
           # signing-config：material 生成 + 两串密文口令；不依赖 JDK
           HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-config \

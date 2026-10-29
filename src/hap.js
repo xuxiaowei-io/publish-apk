@@ -38,6 +38,7 @@ const OPTION_VERBOSE = '--verbose'
 const HAP_OPTIONS = new Set([OPTION_FILE, OPTION_VERBOSE])
 /** hap 中的开关型选项 */
 const HAP_FLAGS = new Set([OPTION_VERBOSE])
+const HAP_MULTI_OPTIONS = new Set([OPTION_FILE])
 
 /** HAP 文件路径，等价于 --file（必填） */
 const ENV_FILE = 'HAP_FILE'
@@ -105,7 +106,7 @@ function renderHapHelp() {
       {
         title: '选项',
         entries: [
-          [`${OPTION_FILE} <路径>`, `HAP 文件路径，必填（可用 ${ENV_FILE} 补齐）`],
+          [`${OPTION_FILE} <路径...>`, `一个或多个 HAP 文件路径（支持 shell glob），必填（可用 ${ENV_FILE} 补齐）`],
           [
             OPTION_VERBOSE,
             `输出全部字段（ZIP 条目、签名子块、全部签名证书链、完整 pack.info / module.json）；命令行未给出时读取 ${ENV_VERBOSE}`,
@@ -142,6 +143,7 @@ function renderHapHelp() {
       `  ${ENV_FILE}=./app.hap ${PROGRAM} ${COMMAND_NAME}`,
       `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./app.hap`,
       '',
+      '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: HAP 是 ZIP，读取 pack.info / module.json；签名只检测 HAP 签名块并从内嵌 PKCS#7 提取证书，未执行验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
       '说明: signed / unsigned 的包内容通常相同，区别在是否带 HAP 签名块',
@@ -158,7 +160,7 @@ function renderAppHelp() {
       {
         title: '选项',
         entries: [
-          [`${OPTION_FILE} <路径>`, `APP 文件路径，必填（可用 ${ENV_APP_FILE} 补齐）`],
+          [`${OPTION_FILE} <路径...>`, `一个或多个 APP 文件路径（支持 shell glob），必填（可用 ${ENV_APP_FILE} 补齐）`],
           [
             OPTION_VERBOSE,
             `输出全部字段（ZIP 条目、签名子块、全部签名证书链、完整 pack.info / pac.json）；命令行未给出时读取 ${ENV_APP_VERBOSE}`,
@@ -195,6 +197,7 @@ function renderAppHelp() {
       `  ${ENV_APP_FILE}=./app.app ${PROGRAM} app`,
       `  ${ENV_APP_VERBOSE}=1 ${PROGRAM} app --file ./app.app`,
       '',
+      '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: APP 是 ZIP，含 pac.json、pack.info 与一个或多个内层 .hap / .hsp；本命令读取外层信息',
       '说明: 签名块在外层，内层 HAP 可能没有单独签名；签名证书从外层 PKCS#7 提取，未执行验签',
       '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
@@ -818,31 +821,51 @@ function runHap(argv, env) {
     return EXIT_OK
   }
 
-  const options = parseOptions(argv, HAP_OPTIONS, renderHapHelp, HAP_FLAGS)
+  const options = parseOptions(
+    argv,
+    HAP_OPTIONS,
+    renderHapHelp,
+    HAP_FLAGS,
+    HAP_MULTI_OPTIONS,
+  )
   const verbose = resolveVerbose(options, env, renderHapHelp)
-  const path = options.get(OPTION_FILE) ?? readEnv(env, ENV_FILE)
-  if (path === undefined) {
+  const envPath = readEnv(env, ENV_FILE)
+  const optionPaths = options.get(OPTION_FILE)
+  const paths =
+    optionPaths === undefined
+      ? envPath === undefined
+        ? undefined
+        : [envPath]
+      : Array.isArray(optionPaths)
+        ? optionPaths
+        : [optionPaths]
+  if (paths === undefined) {
     throw new UsageError(
-      `缺少必填参数: ${OPTION_FILE}（HAP 文件路径），可用环境变量 ${ENV_FILE}`,
+      `缺少必填参数: ${OPTION_FILE}（HAP 文件路径，可多个），可用环境变量 ${ENV_FILE}`,
       renderHapHelp(),
     )
   }
 
-  const buffer = readHapFile(path, renderHapHelp)
-  const parsed = parseHap(buffer, path, renderHapHelp)
-  const certificateGroups = collectHapSignatureCertificates(parsed.signature, buffer)
-  stdout(
-    renderHap(
-      path,
-      buffer.length,
-      parsed.entries,
-      parsed.pack,
-      parsed.moduleJson,
-      parsed.signature,
-      certificateGroups,
-      verbose,
-    ),
-  )
+  for (const [index, path] of paths.entries()) {
+    const buffer = readHapFile(path, renderHapHelp)
+    const parsed = parseHap(buffer, path, renderHapHelp)
+    const certificateGroups = collectHapSignatureCertificates(parsed.signature, buffer)
+    stdout(
+      renderHap(
+        path,
+        buffer.length,
+        parsed.entries,
+        parsed.pack,
+        parsed.moduleJson,
+        parsed.signature,
+        certificateGroups,
+        verbose,
+      ),
+    )
+    if (index < paths.length - 1) {
+      stdout('')
+    }
+  }
   return EXIT_OK
 }
 
@@ -852,32 +875,52 @@ function runApp(argv, env) {
     return EXIT_OK
   }
 
-  const options = parseOptions(argv, HAP_OPTIONS, renderAppHelp, HAP_FLAGS)
+  const options = parseOptions(
+    argv,
+    HAP_OPTIONS,
+    renderAppHelp,
+    HAP_FLAGS,
+    HAP_MULTI_OPTIONS,
+  )
   const verbose = resolveVerbose(options, env, renderAppHelp, ENV_APP_VERBOSE)
-  const path = options.get(OPTION_FILE) ?? readEnv(env, ENV_APP_FILE)
-  if (path === undefined) {
+  const envPath = readEnv(env, ENV_APP_FILE)
+  const optionPaths = options.get(OPTION_FILE)
+  const paths =
+    optionPaths === undefined
+      ? envPath === undefined
+        ? undefined
+        : [envPath]
+      : Array.isArray(optionPaths)
+        ? optionPaths
+        : [optionPaths]
+  if (paths === undefined) {
     throw new UsageError(
-      `缺少必填参数: ${OPTION_FILE}（APP 文件路径），可用环境变量 ${ENV_APP_FILE}`,
+      `缺少必填参数: ${OPTION_FILE}（APP 文件路径，可多个），可用环境变量 ${ENV_APP_FILE}`,
       renderAppHelp(),
     )
   }
 
-  const buffer = readHapFile(path, renderAppHelp)
-  const parsed = parseApp(buffer, path, renderAppHelp)
-  const certificateGroups = collectHapSignatureCertificates(parsed.signature, buffer)
-  stdout(
-    renderHap(
-      path,
-      buffer.length,
-      parsed.entries,
-      parsed.pack,
-      null,
-      parsed.signature,
-      certificateGroups,
-      verbose,
-      { kind: 'APP', pac: parsed.pac, innerModules: parsed.innerModules },
-    ),
-  )
+  for (const [index, path] of paths.entries()) {
+    const buffer = readHapFile(path, renderAppHelp)
+    const parsed = parseApp(buffer, path, renderAppHelp)
+    const certificateGroups = collectHapSignatureCertificates(parsed.signature, buffer)
+    stdout(
+      renderHap(
+        path,
+        buffer.length,
+        parsed.entries,
+        parsed.pack,
+        null,
+        parsed.signature,
+        certificateGroups,
+        verbose,
+        { kind: 'APP', pac: parsed.pac, innerModules: parsed.innerModules },
+      ),
+    )
+    if (index < paths.length - 1) {
+      stdout('')
+    }
+  }
   return EXIT_OK
 }
 
