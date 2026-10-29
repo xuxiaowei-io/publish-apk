@@ -445,6 +445,24 @@ huawei-signing-config-help: ## 华为 生成鸿蒙 build-profile.json5 签名配
 huawei-signing-config: ## 华为 生成鸿蒙 build-profile.json5 签名配置（HARMONY_STORE_FILE / HARMONY_CERTPATH / HARMONY_PROFILE 必填，p12 / p7b 可用 BASE64；口令用 HARMONY_STORE_PASSWORD；HARMONY_ARGS 追加 --write 等）
 	@node src/publish-apk.js huawei signing-config $(HARMONY_SIGNING_ARGS) $(HARMONY_ARGS)
 
+huawei-signing-passwords-help: ## 华为 只补充 build-profile.json5 口令帮助文档
+	node src/publish-apk.js huawei signing-passwords --help
+
+huawei-signing-passwords: ## 华为 只补充 build-profile.json5 的 keyPassword / storePassword（口令用 HARMONY_STORE_PASSWORD；HARMONY_CONFIG / HARMONY_SIGNING_NAME / HARMONY_PRODUCT 可用）
+	@node src/publish-apk.js huawei signing-passwords $(call harmonyOption,HARMONY_CONFIG,--config) $(call harmonyOption,HARMONY_SIGNING_NAME,--name) $(call harmonyOption,HARMONY_PRODUCT,--product) $(HARMONY_ARGS)
+
+huawei-signing-material-help: ## 华为 替换 build-profile.json5 material 字段帮助文档
+	node src/publish-apk.js huawei signing-material --help
+
+huawei-signing-material: ## 华为 替换 build-profile.json5 material 字段（--set 字段=值 放到 HARMONY_ARGS）
+	@node src/publish-apk.js huawei signing-material $(call harmonyOption,HARMONY_CONFIG,--config) $(call harmonyOption,HARMONY_SIGNING_NAME,--name) $(call harmonyOption,HARMONY_PRODUCT,--product) $(HARMONY_ARGS)
+
+huawei-signing-material-env-help: ## 华为 用环境变量替换 material 帮助文档
+	node src/publish-apk.js huawei signing-material-env --help
+
+huawei-signing-material-env: ## 华为 用 HARMONY_* 环境变量校验并替换 material（HARMONY_CONFIG / HARMONY_SIGNING_NAME / HARMONY_PRODUCT 可用）
+	@node src/publish-apk.js huawei signing-material-env $(call harmonyOption,HARMONY_CONFIG,--config) $(call harmonyOption,HARMONY_SIGNING_NAME,--name) $(call harmonyOption,HARMONY_PRODUCT,--product) $(HARMONY_ARGS)
+
 # ------------------------------------------------------------- Google Play
 
 google-help: ## Google Play 帮助文档

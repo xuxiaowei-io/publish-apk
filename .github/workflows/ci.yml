@@ -59,6 +59,9 @@ jobs:
           node src/publish-apk.js huawei client-credentials-upload-file --help > /dev/null
           node src/publish-apk.js huawei client-credentials-upload-file-package-info-update --help > /dev/null
           node src/publish-apk.js huawei signing-config --help > /dev/null
+          node src/publish-apk.js huawei signing-passwords --help > /dev/null
+          node src/publish-apk.js huawei signing-material --help > /dev/null
+          node src/publish-apk.js huawei signing-material-env --help > /dev/null
           node src/publish-apk.js google --help > /dev/null
           node src/publish-apk.js google access-token --help > /dev/null
           node src/publish-apk.js google upload-aab --help > /dev/null
@@ -290,6 +293,34 @@ jobs:
             --profile "$tmp/profile.p7b" --key-alias smoke --no-keytool \
             --config "$tmp/build-profile.json5" --name default --write > /dev/null
           grep -q '"keyAlias": "smoke"' "$tmp/build-profile.json5"
+
+          # signing-passwords：只补充 keyPassword / storePassword
+          cat > "$tmp/passwords-profile.json5" <<EOF
+          {"app":{"signingConfigs":[{"name":"default","type":"HarmonyOS","material":{"certpath":"$tmp/cert.pem","keyAlias":"smoke","keyPassword":"","profile":"$tmp/profile.p7b","signAlg":"SHA256withECDSA","storeFile":"$tmp/storeFile.p12","storePassword":""}}]}}
+          EOF
+          HARMONY_STORE_PASSWORD=smoke node src/publish-apk.js huawei signing-passwords \
+            --config "$tmp/passwords-profile.json5" --name default --no-keytool \
+            > "$tmp/passwords.txt" 2> "$tmp/passwords.err"
+          grep -Eq '"keyPassword"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' "$tmp/passwords-profile.json5"
+          grep -Eq '"storePassword"[[:space:]]*:[[:space:]]*"[0-9a-f]+"' "$tmp/passwords-profile.json5"
+          grep -q '^keyPassword: 已补充$' "$tmp/passwords.txt"
+          grep -q '^storePassword: 已补充$' "$tmp/passwords.txt"
+
+          # signing-material-env：HARMONY_* 先校验再替换 material
+          cat > "$tmp/material-env.json5" <<EOF
+          {"app":{"signingConfigs":[{"name":"default","type":"HarmonyOS","material":{"certpath":"","keyAlias":"","keyPassword":"","profile":"","signAlg":"SHA256withECDSA","storeFile":"","storePassword":""}}]}}
+          EOF
+          HARMONY_STORE_FILE="$tmp/storeFile.p12" HARMONY_CERTPATH="$tmp/cert.pem" \
+            HARMONY_PROFILE="$tmp/profile.p7b" HARMONY_KEY_ALIAS=smoke \
+            HARMONY_SIGN_ALG=SHA256withECDSA \
+            node src/publish-apk.js huawei signing-material-env \
+            --config "$tmp/material-env.json5" --name default --no-keytool \
+            > "$tmp/material-env.txt" 2> "$tmp/material-env.err"
+          grep -Eq '"keyAlias"[[:space:]]*:[[:space:]]*"smoke"' "$tmp/material-env.json5"
+          grep -Eq "\"storeFile\"[[:space:]]*:[[:space:]]*\"$tmp/storeFile.p12\"" "$tmp/material-env.json5"
+          grep -Eq "\"certpath\"[[:space:]]*:[[:space:]]*\"$tmp/cert.pem\"" "$tmp/material-env.json5"
+
+
 
           # keystore：用 keytool 生成 PKCS#12，校验口令 / 别名，并从 BASE64 落盘
           if command -v keytool > /dev/null 2>&1; then

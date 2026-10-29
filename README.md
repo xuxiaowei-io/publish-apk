@@ -386,6 +386,9 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 | `huawei client-credentials-upload-file` | 同上确定 `access_token` 后取上传地址并上传本地文件 | 文件对象 ID（`objectId`） |
 | `huawei client-credentials-upload-file-package-info-update` | 同上确定 `access_token` 后**上传文件并登记软件包**（未给 `--object-id` 时自己上传） | 文件对象 ID（`objectId`） |
 | `huawei signing-config` | 用 `.cer` / `.p7b` / `.p12` 与明文口令生成鸿蒙签名配置（material + 密文口令） | `signingConfig` JSON |
+| `huawei signing-passwords` | 只补充已有 `build-profile.json5` 的 `keyPassword` / `storePassword` | 补充结果 |
+| `huawei signing-material` | 用 `--set 字段=值` 替换 material 字段 | 替换结果 |
+| `huawei signing-material-env` | 用 `HARMONY_*` 环境变量先校验再替换 material | 替换结果 |
 
 ### 生成鸿蒙签名配置（`huawei signing-config`）
 
@@ -445,6 +448,56 @@ HARMONY_PROFILE_BASE64="$(openssl base64 -A -in profile.p7b)" \
 - 不给 `--write` 时只把 `signingConfig` JSON 写到 `stdout`，方便手工粘贴；`--write` 只更新同名 `signingConfig` 的 `material`，改前备份到 `build-profile.json5` 所在目录的 `.signing/backup/`。
 - 明文口令优先用 `HARMONY_STORE_PASSWORD` / `HARMONY_KEY_PASSWORD`，也可以交互输入；`--store-password` / `--key-password` 会进入 shell 历史，不推荐。
 - material 是解开两串密文的唯一钥匙，不能删除、不能入库；`--new-material` 可重造一套（旧的自动备份）。
+
+### 只补充 build-profile.json5 的口令（`huawei signing-passwords`）
+
+已有 `build-profile.json5` 里 `material.storeFile` / `keyAlias` / `certpath` / `profile` 都齐了，
+只缺 `keyPassword` / `storePassword`（例如刚 clone 下来、口令字段为空）时，用这个命令：
+
+```bash
+HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-passwords \
+  --config ./build-profile.json5 --name default
+```
+
+- 只改目标 `signingConfig` 的 `keyPassword` / `storePassword`，其它 `material` 字段与注释保持不变。
+- `--store-file` 不需要：密钥库取 `material.storeFile`，别名取 `material.keyAlias`。
+- `--config` 默认 `./build-profile.json5`；`--name` 默认 `default`；也可用 `--product` 按产品找配置。
+- 口令用 `HARMONY_STORE_PASSWORD` / `HARMONY_KEY_PASSWORD`（或 `--store-password` /
+  `--key-password` / 口令文件 / 交互输入）；`keyPassword` 未给时默认等于 `storePassword`。
+- 明文口令会用 `.p12` 同级 `material/` 的 workKey 加密后写入；material 不存在时自动生成，已有可用
+  material 复用，`--new-material` 可重造。
+- 写回前备份到 `build-profile.json5` 同级的 `.signing/backup/`；回读校验两个字段。
+- 默认用 `keytool` 校验口令 / 别名；没有 JDK 或不想自检时加 `--no-keytool`。
+
+### 用环境变量替换 material（`huawei signing-material-env`）
+
+CI 里通常把签名材料放在环境变量中；这个命令先校验，再把通过校验的内容替换到
+`build-profile.json5` 的 `material`：
+
+```bash
+HARMONY_STORE_FILE_BASE64=... \
+HARMONY_CERTPATH_BASE64=... \
+HARMONY_PROFILE_BASE64=... \
+HARMONY_STORE_PASSWORD=<p12口令> \
+publish-apk huawei signing-material-env \
+  --config ./build-profile.json5 --name default
+```
+
+- 支持的 `HARMONY_*` 变量：
+  - `HARMONY_STORE_FILE` / `HARMONY_STORE_FILE_BASE64` → `material.storeFile`
+  - `HARMONY_CERTPATH` / `HARMONY_CERT` / `HARMONY_CERTPATH_BASE64` / `HARMONY_CERT_BASE64` → `material.certpath`
+  - `HARMONY_PROFILE` / `HARMONY_PROFILE_BASE64` → `material.profile`
+  - `HARMONY_KEY_ALIAS` → `material.keyAlias`
+  - `HARMONY_SIGN_ALG` → `material.signAlg`
+  - `HARMONY_STORE_PASSWORD` / `HARMONY_KEY_PASSWORD` → 加密后更新两串口令
+  - `HARMONY_*_OUT` 控制 BASE64 / 内容落盘位置
+- 先校验证书 / Profile / p12 内容；有口令时还会用 `keytool` 自检；全部通过后才写回。
+- 没有提供的变量保持原值；只替换提供的字段。
+- 口令通过 `.p12` 同级 `material/` 加密；material 不存在时自动生成，`--new-material` 可重造。
+- 写回前备份到 `.signing/backup/`，写后回读校验。
+- 只给 `HARMONY_KEY_PASSWORD` 时还需要 `HARMONY_STORE_PASSWORD` 才能校验 / 加密。
+- 如果只想手工替换路径 / 别名，用 `huawei signing-material --set 字段=值`；只补口令用
+  `huawei signing-passwords`。
 
 ### 上传一个安装包分三步
 
@@ -925,6 +978,10 @@ HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-config \
   HARMONY_STORE_FILE=./storeFile.p12 HARMONY_CERTPATH=./certpath.cer \
   HARMONY_PROFILE=./profile.p7b HARMONY_SIGNING_NAME=default HARMONY_ARGS="--write"
 make huawei-signing-config-help                  # 鸿蒙签名配置帮助
+HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-passwords HARMONY_CONFIG=./build-profile.json5 HARMONY_SIGNING_NAME=default
+make huawei-signing-material HARMONY_CONFIG=./build-profile.json5 HARMONY_ARGS="--set storeFile=./storeFile.p12 --set keyAlias=release"
+HARMONY_STORE_FILE_BASE64=... make huawei-signing-material-env HARMONY_CONFIG=./build-profile.json5 HARMONY_SIGNING_NAME=default
+make huawei-signing-passwords-help               # 只补充 keyPassword/storePassword 帮助
 make huawei-help                                 # huawei 子命令帮助
 make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
 make huawei-service-account-upload-url HUAWEI_APP_ID=xxx HUAWEI_FILE=./a1.apk

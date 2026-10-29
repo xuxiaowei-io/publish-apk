@@ -41,6 +41,9 @@ import { renderHelp } from './help.js'
 
 /** 命令名（huawei 子命令） */
 const COMMAND_NAME = 'signing-config'
+const PASSWORDS_COMMAND_NAME = 'signing-passwords'
+const MATERIAL_COMMAND_NAME = 'signing-material'
+const MATERIAL_ENV_COMMAND_NAME = 'signing-material-env'
 
 const OPTION_STORE_FILE = '--store-file'
 const OPTION_STORE_FILE_OUT = '--store-file-out'
@@ -84,6 +87,40 @@ const SIGNING_OPTIONS = new Set([
   OPTION_VERBOSE,
 ])
 const SIGNING_FLAGS = new Set([OPTION_WRITE, OPTION_NEW_MATERIAL, OPTION_NO_KEYTOOL, OPTION_VERBOSE])
+
+const PASSWORD_OPTIONS = new Set([
+  OPTION_CONFIG,
+  OPTION_NAME,
+  OPTION_PRODUCT,
+  OPTION_STORE_PASSWORD,
+  OPTION_KEY_PASSWORD,
+  OPTION_STORE_PASSWORD_FILE,
+  OPTION_KEY_PASSWORD_FILE,
+  OPTION_NO_KEYTOOL,
+  OPTION_NEW_MATERIAL,
+])
+const PASSWORD_FLAGS = new Set([OPTION_NO_KEYTOOL, OPTION_NEW_MATERIAL])
+
+const OPTION_SET = '--set'
+const MATERIAL_OPTIONS = new Set([OPTION_CONFIG, OPTION_NAME, OPTION_PRODUCT, OPTION_SET])
+const MATERIAL_FLAGS = new Set()
+const MATERIAL_MULTI_OPTIONS = new Set([OPTION_SET])
+const MATERIAL_EDITABLE_FIELDS = new Set([
+  'storeFile',
+  'certpath',
+  'profile',
+  'keyAlias',
+  'signAlg',
+])
+
+const MATERIAL_ENV_OPTIONS = new Set([
+  OPTION_CONFIG,
+  OPTION_NAME,
+  OPTION_PRODUCT,
+  OPTION_NO_KEYTOOL,
+  OPTION_NEW_MATERIAL,
+])
+const MATERIAL_ENV_FLAGS = new Set([OPTION_NO_KEYTOOL, OPTION_NEW_MATERIAL])
 
 const ENV_STORE_FILE = 'HARMONY_STORE_FILE'
 const ENV_STORE_FILE_BASE64 = 'HARMONY_STORE_FILE_BASE64'
@@ -429,6 +466,236 @@ function verifyPasswordPair(storeFile, storePassword, keyPassword, alias) {
   } finally {
     fs.rmSync(scratch, { recursive: true, force: true })
   }
+}
+
+function renderSigningPasswordsHelp() {
+  return renderHelp({
+    title: `${PROGRAM} huawei ${PASSWORDS_COMMAND_NAME} - 补充 build-profile.json5 的口令`,
+    usage: [`${PROGRAM} huawei ${PASSWORDS_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '作用',
+        entries: [
+          [
+            '只补充',
+            '已有 build-profile.json5 的 signingConfigs[].material.keyPassword / storePassword；其它 material 字段保持不变',
+          ],
+          [
+            'material',
+            '按 .p12 同级目录的 material/ 加密；不存在时自动生成，已有可用 material 复用',
+          ],
+        ],
+      },
+      {
+        title: '选项',
+        entries: [
+          [
+            `${OPTION_CONFIG} <文件>`,
+            `build-profile.json5 路径，默认 ./${DEFAULT_CONFIG}（可用 ${ENV_CONFIG} 补齐）`,
+          ],
+          [`${OPTION_NAME} <名字>`, `要补充的 signingConfig 名字，默认 ${DEFAULT_NAME}（可用 ${ENV_NAME} 补齐）`],
+          [`${OPTION_PRODUCT} <产品>`, `按 products[].name 找到它挂的 signingConfig（可用 ${ENV_PRODUCT} 补齐）`],
+          [
+            `${OPTION_STORE_PASSWORD} <明文>`,
+            `.p12 明文口令；建议用 ${ENV_STORE_PASSWORD} 或交互输入`,
+          ],
+          [
+            `${OPTION_KEY_PASSWORD} <明文>`,
+            `密钥明文口令；默认与 ${OPTION_STORE_PASSWORD} 相同`,
+          ],
+          [`${OPTION_STORE_PASSWORD_FILE} <文件>`, '从文件第一行读 .p12 口令；- 表示 stdin'],
+          [`${OPTION_KEY_PASSWORD_FILE} <文件>`, '从文件第一行读密钥口令；- 表示 stdin'],
+          [OPTION_NEW_MATERIAL, 'material 已存在也重造一套（旧的挪成 material.bak-<时间戳>）'],
+          [OPTION_NO_KEYTOOL, '跳过 keytool 别名发现与「口令能否打开 p12」的自检'],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_CONFIG, `等价于 ${OPTION_CONFIG}`],
+          [ENV_NAME, `等价于 ${OPTION_NAME}`],
+          [ENV_PRODUCT, `等价于 ${OPTION_PRODUCT}`],
+          [ENV_STORE_PASSWORD, `等价于 ${OPTION_STORE_PASSWORD}`],
+          [ENV_KEY_PASSWORD, `等价于 ${OPTION_KEY_PASSWORD}`],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          ['stdout', '补充结果（配置 / signingConfig / 密钥库 / 别名 / material / 备份）'],
+          ['stderr', '进度、keytool 自检结果与警告；明文口令不会输出'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '成功'],
+          ['1', '参数缺失、配置 / 密钥库校验失败或写回失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${ENV_STORE_PASSWORD}=<p12口令> ${PROGRAM} huawei ${PASSWORDS_COMMAND_NAME} \\`,
+      `    --config ./build-profile.json5 --name default`,
+      '',
+      '说明: 不需要 certpath / profile；只改 keyPassword / storePassword，其它 material 字段和注释保持不变',
+      '说明: 明文口令会用 .p12 同级 material/ 的 workKey 加密后再写入，不会写入明文',
+      '说明: 写回前会备份到 build-profile.json5 所在目录的 .signing/backup/',
+      '说明: 没有 keytool / 不想自检时加 --no-keytool；别名取 material.keyAlias',
+    ],
+  })
+}
+
+function renderSigningMaterialHelp() {
+  return renderHelp({
+    title: `${PROGRAM} huawei ${MATERIAL_COMMAND_NAME} - 替换 build-profile.json5 的 material 字段`,
+    usage: [`${PROGRAM} huawei ${MATERIAL_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '作用',
+        entries: [
+          [
+            '只替换',
+            '目标 signingConfigs[].material 中指定的字段；其它字段、顺序与注释保持不变',
+          ],
+          [
+            '可改字段',
+            'storeFile / certpath / profile / keyAlias / signAlg；口令请用 signing-passwords',
+          ],
+        ],
+      },
+      {
+        title: '选项',
+        entries: [
+          [
+            `${OPTION_CONFIG} <文件>`,
+            `build-profile.json5 路径，默认 ./${DEFAULT_CONFIG}（可用 ${ENV_CONFIG} 补齐）`,
+          ],
+          [`${OPTION_NAME} <名字>`, `要修改的 signingConfig 名字，默认 ${DEFAULT_NAME}（可用 ${ENV_NAME} 补齐）`],
+          [`${OPTION_PRODUCT} <产品>`, `按 products[].name 找到它挂的 signingConfig（可用 ${ENV_PRODUCT} 补齐）`],
+          [
+            `${OPTION_SET} <字段=值>`,
+            '要替换的 material 字段，可重复；例如 --set storeFile=./storeFile.p12 --set keyAlias=release',
+          ],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_CONFIG, `等价于 ${OPTION_CONFIG}`],
+          [ENV_NAME, `等价于 ${OPTION_NAME}`],
+          [ENV_PRODUCT, `等价于 ${OPTION_PRODUCT}`],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          ['stdout', '替换结果（配置 / signingConfig / 替换的字段 / 备份）'],
+          ['stderr', '进度与警告'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '成功'],
+          ['1', '参数缺失、配置 / material 校验失败或写回失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${PROGRAM} huawei ${MATERIAL_COMMAND_NAME} --config ./build-profile.json5 --name default \\`,
+      `    --set storeFile=./storeFile.p12 --set keyAlias=release`,
+      '',
+      '说明: 只改指定字段，不重新生成 material、不改口令；口令空白请用 signing-passwords',
+      '说明: 写回前备份到 build-profile.json5 所在目录的 .signing/backup/，写后回读校验',
+      '说明: keyPassword / storePassword 不接受 --set；请用 huawei signing-passwords 加密后写入',
+    ],
+  })
+}
+
+function renderSigningMaterialEnvHelp() {
+  return renderHelp({
+    title: `${PROGRAM} huawei ${MATERIAL_ENV_COMMAND_NAME} - 用 CI 环境变量替换 material`,
+    usage: [`${PROGRAM} huawei ${MATERIAL_ENV_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '作用',
+        entries: [
+          [
+            '流程',
+            '读取 HARMONY_* 环境变量 → 校验证书 / Profile / p12 / 口令 → 替换目标 material 的对应字段',
+          ],
+          [
+            '校验',
+            '证书、Profile、p12 内容先解析；有口令时用 keytool 自检；全部通过后才写回配置',
+          ],
+        ],
+      },
+      {
+        title: '选项',
+        entries: [
+          [
+            `${OPTION_CONFIG} <文件>`,
+            `build-profile.json5 路径，默认 ./${DEFAULT_CONFIG}（可用 ${ENV_CONFIG} 补齐）`,
+          ],
+          [`${OPTION_NAME} <名字>`, `要修改的 signingConfig 名字，默认 ${DEFAULT_NAME}（可用 ${ENV_NAME} 补齐）`],
+          [`${OPTION_PRODUCT} <产品>`, `按 products[].name 找到它挂的 signingConfig（可用 ${ENV_PRODUCT} 补齐）`],
+          [OPTION_NO_KEYTOOL, '跳过 keytool 口令自检（仍会校验证书 / Profile / p12 内容）'],
+          [OPTION_NEW_MATERIAL, 'material 已存在也重造一套（旧的挪成 material.bak-<时间戳>）'],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_STORE_FILE, 'p12 路径或 BASE64，替换 material.storeFile'],
+          [ENV_STORE_FILE_BASE64, 'p12 的 BASE64，替换 material.storeFile'],
+          [ENV_STORE_FILE_OUT, 'p12 内容输出路径；不传时按 storeFile 默认规则'],
+          [ENV_CERTPATH, '证书路径 / PEM / BASE64，替换 material.certpath'],
+          [ENV_CERT, '证书来源别名'],
+          [ENV_CERTPATH_BASE64, '证书 BASE64'],
+          [ENV_CERT_BASE64, '证书 BASE64 别名'],
+          [ENV_CERTPATH_OUT, '证书内容输出路径'],
+          [ENV_PROFILE, 'P7B 路径或 BASE64，替换 material.profile'],
+          [ENV_PROFILE_BASE64, 'P7B 的 BASE64'],
+          [ENV_PROFILE_OUT, 'P7B 内容输出路径'],
+          [ENV_KEY_ALIAS, '替换 material.keyAlias'],
+          [ENV_SIGN_ALG, '替换 material.signAlg'],
+          [ENV_STORE_PASSWORD, 'p12 口令；同时更新 storePassword / keyPassword'],
+          [ENV_KEY_PASSWORD, '密钥口令；默认与 storePassword 相同'],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          ['stdout', '替换结果（配置 / signingConfig / 替换字段 / material / 备份）'],
+          ['stderr', '校验进度、警告；明文口令不会输出'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '成功'],
+          ['1', '参数缺失、环境变量内容校验失败或写回失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ${ENV_STORE_FILE_BASE64}=... ${ENV_CERTPATH_BASE64}=... ${ENV_PROFILE_BASE64}=... \\`,
+      `    ${ENV_STORE_PASSWORD}=<口令> ${PROGRAM} huawei ${MATERIAL_ENV_COMMAND_NAME} \\`,
+      `    --config ./build-profile.json5 --name default`,
+      '',
+      '说明: 至少提供一个 HARMONY_* 材料变量；没有提供的字段保持原值',
+      '说明: 有 HARMONY_STORE_PASSWORD 时按 .p12 同级 material/ 加密并同时更新两串口令',
+      '说明: 只给 HARMONY_KEY_PASSWORD 时需要同时给 HARMONY_STORE_PASSWORD 才能校验 / 加密',
+      '说明: 写回前备份到 .signing/backup/，写后回读校验',
+    ],
+  })
 }
 
 // ------------------------------------------------------------------ 路径与 material
@@ -1120,6 +1387,556 @@ function emitMaterialInfo({ storeFile, certpath, profile, password, verbose }) {
   } catch (error) {
     stderr(`警告: 读取 .p7b 信息失败: ${error.message}`)
   }
+}
+
+/** 从 signingConfigs / products 里选出目标 signingConfig */
+function selectSigningConfig(text, productName, name, help) {
+  let targetName = name ?? DEFAULT_NAME
+  if (productName !== undefined) {
+    const product = readProducts(text).find((item) => item.name === productName)
+    if (product === undefined) {
+      throw new UsageError(`products 里没有名为 ${productName} 的产品`, help)
+    }
+    if (product.signingConfig === undefined) {
+      throw new UsageError(`产品 ${productName} 没有配置 signingConfig`, help)
+    }
+    targetName = product.signingConfig
+  }
+  const entries = readSigningConfigs(text)
+  const entry = entries.find((item) => item.name === targetName)
+  if (entry === undefined) {
+    throw new UsageError(
+      `signingConfigs 里没有名为 ${targetName} 的配置` +
+        `（有：${entries.map((item) => item.name ?? '(未命名)').join('、')}）`,
+      help,
+    )
+  }
+  return { entry, name: targetName }
+}
+
+/** 只替换 material 文本里的一个字符串字段；字段缺失时插到末尾 */
+function setMaterialStringField(text, key, value) {
+  const pattern = new RegExp(`((?:^|[,{\\s])["']?${key}["']?\\s*:\\s*)"([^"]*)"`)
+  if (pattern.test(text)) {
+    return text.replace(pattern, (_, prefix) => `${prefix}${JSON.stringify(value)}`)
+  }
+  const close = text.lastIndexOf('}')
+  if (close < 0) {
+    throw new Error('material 对象没有闭合')
+  }
+  const before = text.slice(0, close).replace(/\s*$/, '')
+  const indentMatch = /\n([ \t]+)["']?[\w-]+["']?\s*:/.exec(text)
+  const fieldIndent = indentMatch?.[1] ?? '  '
+  const closeIndent = fieldIndent.length >= 2 ? fieldIndent.slice(0, -2) : ''
+  const comma = before.endsWith('{') || before.endsWith(',') ? '' : ','
+  return `${before}${comma}\n${fieldIndent}${JSON.stringify(key)}: ${JSON.stringify(value)}\n${closeIndent}}`
+}
+
+/** 只替换目标 material 的指定字符串字段，保留其它字段与注释 */
+function patchMaterialFields(configText, entry, fields, help) {
+  const materialMatch = /["']?material["']?\s*:\s*\{/.exec(entry.text)
+  if (!materialMatch) {
+    throw new UsageError('signingConfig 没有 material 对象，无法替换字段', help)
+  }
+  const open = materialMatch.index + materialMatch[0].length - 1
+  const close = findContainerEnd(entry.text, open)
+  if (close < 0) {
+    throw new UsageError('signingConfig 的 material 对象没有闭合', help)
+  }
+  let materialText = entry.text.slice(open, close + 1)
+  for (const [key, value] of Object.entries(fields)) {
+    materialText = setMaterialStringField(materialText, key, value)
+  }
+  const patchedEntry = entry.text.slice(0, open) + materialText + entry.text.slice(close + 1)
+  return configText.slice(0, entry.start) + patchedEntry + configText.slice(entry.end)
+}
+
+/** 只改目标 signingConfig 的 keyPassword / storePassword */
+function patchMaterialPasswords(configText, entry, keyPasswordHex, storePasswordHex, help) {
+  return patchMaterialFields(
+    configText,
+    entry,
+    { keyPassword: keyPasswordHex, storePassword: storePasswordHex },
+    help,
+  )
+}
+
+/** 写回 build-profile.json5；备份后回读校验两个口令字段 */
+function writePatchedConfig(configFile, patched, name, expected, help) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+  const backupDir = path.join(path.dirname(configFile), '.signing', 'backup')
+  fs.mkdirSync(backupDir, { recursive: true, mode: 0o700 })
+  const backup = path.join(backupDir, `${path.basename(configFile)}.bak-${stamp}`)
+  fs.copyFileSync(configFile, backup)
+  fs.writeFileSync(configFile, patched)
+
+  const reread = readSigningConfigs(fs.readFileSync(configFile, 'utf8')).find(
+    (item) => item.name === name,
+  )
+  if (!reread) {
+    throw new Error(`写回后找不到签名配置 ${name}；备份在 ${backup}，可用 cp 还原`)
+  }
+  for (const [key, value] of Object.entries(expected)) {
+    if (stringField(reread.text, key) !== value) {
+      throw new Error(
+        `写回后 ${key} 不一致；备份在 ${backup}，可用 cp ${backup} ${configFile} 还原`,
+      )
+    }
+  }
+  return backup
+}
+
+/** 只补充 build-profile.json5 里 keyPassword / storePassword 的命令入口 */
+export async function runHuaweiSigningPasswords(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderSigningPasswordsHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(
+    argv,
+    PASSWORD_OPTIONS,
+    renderSigningPasswordsHelp,
+    PASSWORD_FLAGS,
+  )
+  const configFile = path.resolve(
+    options.get(OPTION_CONFIG) ?? readEnv(env, ENV_CONFIG) ?? DEFAULT_CONFIG,
+  )
+  if (!fs.existsSync(configFile)) {
+    throw new UsageError(`build-profile.json5 不存在: ${configFile}`, renderSigningPasswordsHelp())
+  }
+  const configText = fs.readFileSync(configFile, 'utf8')
+  const productName = options.get(OPTION_PRODUCT) ?? readEnv(env, ENV_PRODUCT)
+  const name = options.get(OPTION_NAME) ?? readEnv(env, ENV_NAME)
+  const { entry, name: targetName } = selectSigningConfig(
+    configText,
+    productName,
+    name,
+    renderSigningPasswordsHelp(),
+  )
+
+  const storeFileValue = stringField(entry.text, 'storeFile')
+  if (storeFileValue === undefined || storeFileValue.trim() === '') {
+    throw new UsageError(
+      '目标 signingConfig 的 material.storeFile 为空；请先用 signing-config 生成完整配置',
+      renderSigningPasswordsHelp(),
+    )
+  }
+  const storeFile = path.resolve(path.dirname(configFile), storeFileValue)
+  if (!fs.existsSync(storeFile)) {
+    throw new UsageError(`material.storeFile 不存在: ${storeFile}`, renderSigningPasswordsHelp())
+  }
+  if (!fs.statSync(storeFile).isFile()) {
+    throw new UsageError(`material.storeFile 不是普通文件: ${storeFile}`, renderSigningPasswordsHelp())
+  }
+  const keyAlias = stringField(entry.text, 'keyAlias')
+  if (keyAlias === undefined || keyAlias.trim() === '') {
+    throw new UsageError(
+      '目标 signingConfig 的 material.keyAlias 为空；请先用 signing-config 生成完整配置',
+      renderSigningPasswordsHelp(),
+    )
+  }
+
+  const storePassword = await resolvePassword({
+    options,
+    env,
+    option: OPTION_STORE_PASSWORD,
+    fileOption: OPTION_STORE_PASSWORD_FILE,
+    envName: ENV_STORE_PASSWORD,
+    label: '.p12 口令',
+    help: renderSigningPasswordsHelp,
+  })
+  const keyPassword = await resolvePassword({
+    options,
+    env,
+    option: OPTION_KEY_PASSWORD,
+    fileOption: OPTION_KEY_PASSWORD_FILE,
+    envName: ENV_KEY_PASSWORD,
+    label: '密钥口令',
+    fallback: storePassword.value,
+    help: renderSigningPasswordsHelp,
+  })
+
+  const noKeytool = options.get(OPTION_NO_KEYTOOL) === true
+  if (!noKeytool) {
+    if (!keytoolAvailable()) {
+      stderr('警告: 没有找到 keytool，跳过「口令 / 别名能否打开 .p12」的自检')
+    } else {
+      const pair = verifyPasswordPair(
+        storeFile,
+        storePassword.value,
+        keyPassword.value,
+        keyAlias,
+      )
+      if (!pair.ok) {
+        throw new UsageError(
+          `keytool 用这套口令打不开别名 ${keyAlias} 的私钥: ${pair.detail}`,
+          renderSigningPasswordsHelp(),
+        )
+      }
+      stderr(`keytool 自检通过: 别名 ${keyAlias} 的私钥可以用这套口令打开`)
+    }
+  } else {
+    stderr('按 --no-keytool 跳过 keytool 自检')
+  }
+
+  const materialDir = path.join(path.dirname(storeFile), 'material')
+  const { workKey, note } = prepareMaterial(
+    materialDir,
+    options.get(OPTION_NEW_MATERIAL) === true,
+    renderSigningPasswordsHelp,
+  )
+  const storePasswordHex = encryptSecret(workKey, storePassword.value)
+  const keyPasswordHex = encryptSecret(workKey, keyPassword.value)
+  for (const [label, hex, plain] of [
+    ['storePassword', storePasswordHex, storePassword.value],
+    ['keyPassword', keyPasswordHex, keyPassword.value],
+  ]) {
+    if (decryptSecret(materialDir, hex, label) !== plain) {
+      throw new Error(`${label} 加密后解不回原文（这是本工具的 bug，请不要写进配置）`)
+    }
+  }
+
+  const patched = patchMaterialPasswords(
+    configText,
+    entry,
+    keyPasswordHex,
+    storePasswordHex,
+    renderSigningPasswordsHelp(),
+  )
+  const backup = writePatchedConfig(
+    configFile,
+    patched,
+    targetName,
+    { keyPassword: keyPasswordHex, storePassword: storePasswordHex },
+    renderSigningPasswordsHelp(),
+  )
+
+  const lines = [
+    `配置: ${configFile}`,
+    `签名配置: ${targetName}`,
+    `密钥库: ${storeFile}`,
+    `别名: ${keyAlias}`,
+    `material: ${materialDir}（${note}）`,
+    'keyPassword: 已补充',
+    'storePassword: 已补充',
+    `备份: ${backup}`,
+  ]
+  if (storePassword.value === keyPassword.value) {
+    stderr('提示: keyPassword 与 storePassword 相同')
+  }
+  stderr(`已补充 ${targetName} 的 keyPassword / storePassword；备份在 ${backup}`)
+  stdout(lines.join('\n'))
+  return EXIT_OK
+}
+
+/** 替换 build-profile.json5 的 material 字段 */
+export function runHuaweiSigningMaterial(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderSigningMaterialHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(
+    argv,
+    MATERIAL_OPTIONS,
+    renderSigningMaterialHelp,
+    MATERIAL_FLAGS,
+    MATERIAL_MULTI_OPTIONS,
+  )
+  const configFile = path.resolve(
+    options.get(OPTION_CONFIG) ?? readEnv(env, ENV_CONFIG) ?? DEFAULT_CONFIG,
+  )
+  if (!fs.existsSync(configFile)) {
+    throw new UsageError(`build-profile.json5 不存在: ${configFile}`, renderSigningMaterialHelp())
+  }
+  const configText = fs.readFileSync(configFile, 'utf8')
+  const productName = options.get(OPTION_PRODUCT) ?? readEnv(env, ENV_PRODUCT)
+  const name = options.get(OPTION_NAME) ?? readEnv(env, ENV_NAME)
+  const { entry, name: targetName } = selectSigningConfig(
+    configText,
+    productName,
+    name,
+    renderSigningMaterialHelp(),
+  )
+
+  const rawSet = options.get(OPTION_SET)
+  const values = rawSet === undefined ? [] : Array.isArray(rawSet) ? rawSet : [rawSet]
+  if (values.length === 0) {
+    throw new UsageError(
+      `至少需要一个 ${OPTION_SET} <字段=值>，例如 ${OPTION_SET} storeFile=./storeFile.p12`,
+      renderSigningMaterialHelp(),
+    )
+  }
+  const fields = {}
+  for (const raw of values) {
+    const index = raw.indexOf('=')
+    if (index <= 0) {
+      throw new UsageError(`--set 需要 <字段=值> 形式: ${raw}`, renderSigningMaterialHelp())
+    }
+    const key = raw.slice(0, index).trim()
+    const value = raw.slice(index + 1)
+    if (key === 'keyPassword' || key === 'storePassword') {
+      throw new UsageError(
+        `${key} 请用 huawei signing-passwords 补充（会按 material 加密），不要直接 --set`,
+        renderSigningMaterialHelp(),
+      )
+    }
+    if (!MATERIAL_EDITABLE_FIELDS.has(key)) {
+      throw new UsageError(
+        `不支持替换 material.${key}；可替换: ${[...MATERIAL_EDITABLE_FIELDS].join(' / ')}`,
+        renderSigningMaterialHelp(),
+      )
+    }
+    if (value === '' || /[\r\n\0]/.test(value)) {
+      throw new UsageError(`${key} 的值不能为空，也不能包含换行或 NUL 字符`, renderSigningMaterialHelp())
+    }
+    fields[key] = value
+  }
+
+  const patched = patchMaterialFields(configText, entry, fields, renderSigningMaterialHelp())
+  const backup = writePatchedConfig(
+    configFile,
+    patched,
+    targetName,
+    fields,
+    renderSigningMaterialHelp(),
+  )
+
+  const lines = [
+    `配置: ${configFile}`,
+    `签名配置: ${targetName}`,
+    '替换:',
+  ]
+  for (const [key, value] of Object.entries(fields)) {
+    lines.push(`- ${key}=${value}`)
+  }
+  lines.push(`备份: ${backup}`)
+  stderr(`已替换 ${targetName} 的 material 字段；备份在 ${backup}`)
+  stdout(lines.join('\n'))
+  return EXIT_OK
+}
+
+/** 用 CI 环境变量校验并替换 build-profile.json5 的 material */
+export async function runHuaweiSigningMaterialEnv(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderSigningMaterialEnvHelp())
+    return EXIT_OK
+  }
+
+  const options = parseOptions(
+    argv,
+    MATERIAL_ENV_OPTIONS,
+    renderSigningMaterialEnvHelp,
+    MATERIAL_ENV_FLAGS,
+  )
+  const configFile = path.resolve(
+    options.get(OPTION_CONFIG) ?? readEnv(env, ENV_CONFIG) ?? DEFAULT_CONFIG,
+  )
+  if (!fs.existsSync(configFile)) {
+    throw new UsageError(`build-profile.json5 不存在: ${configFile}`, renderSigningMaterialEnvHelp())
+  }
+  const configText = fs.readFileSync(configFile, 'utf8')
+  const productName = options.get(OPTION_PRODUCT) ?? readEnv(env, ENV_PRODUCT)
+  const name = options.get(OPTION_NAME) ?? readEnv(env, ENV_NAME)
+  const { entry, name: targetName } = selectSigningConfig(
+    configText,
+    productName,
+    name,
+    renderSigningMaterialEnvHelp(),
+  )
+
+  const fields = {}
+  const storeValues = [
+    readEnv(env, ENV_STORE_FILE),
+    readEnv(env, ENV_STORE_FILE_BASE64),
+  ].filter((value) => value !== undefined)
+  const certValues = [
+    readEnv(env, ENV_CERTPATH),
+    readEnv(env, ENV_CERT),
+    readEnv(env, ENV_CERTPATH_BASE64),
+    readEnv(env, ENV_CERT_BASE64),
+  ].filter((value) => value !== undefined)
+  const profileValues = [
+    readEnv(env, ENV_PROFILE),
+    readEnv(env, ENV_PROFILE_BASE64),
+  ].filter((value) => value !== undefined)
+  const keyAliasEnv = readEnv(env, ENV_KEY_ALIAS)
+  const signAlgEnv = readEnv(env, ENV_SIGN_ALG)
+  const storePasswordEnv = readEnv(env, ENV_STORE_PASSWORD)
+  const keyPasswordEnv = readEnv(env, ENV_KEY_PASSWORD)
+
+  const configStoreFileValue = stringField(entry.text, 'storeFile')
+  let storeFile =
+    configStoreFileValue === undefined || configStoreFileValue.trim() === ''
+      ? undefined
+      : path.resolve(path.dirname(configFile), configStoreFileValue)
+  if (storeValues.length > 0) {
+    storeFile = resolveStoreFileCandidates(
+      storeValues,
+      readEnv(env, ENV_STORE_FILE_OUT),
+      renderSigningMaterialEnvHelp,
+    )
+    fields.storeFile = storeFile
+  }
+  if (certValues.length > 0 || profileValues.length > 0 || storePasswordEnv !== undefined) {
+    if (storeFile === undefined) {
+      throw new UsageError(
+        'material.storeFile 为空；替换证书 / Profile 或口令需要先提供 HARMONY_STORE_FILE',
+        renderSigningMaterialEnvHelp(),
+      )
+    }
+    if (!fs.existsSync(storeFile)) {
+      throw new UsageError(`material.storeFile 不存在: ${storeFile}`, renderSigningMaterialEnvHelp())
+    }
+    if (!fs.statSync(storeFile).isFile()) {
+      throw new UsageError(`material.storeFile 不是普通文件: ${storeFile}`, renderSigningMaterialEnvHelp())
+    }
+  }
+  if (certValues.length > 0) {
+    fields.certpath = resolveCertificateCandidates(
+      certValues,
+      readEnv(env, ENV_CERTPATH_OUT),
+      storeFile,
+      renderSigningMaterialEnvHelp,
+    )
+  }
+  if (profileValues.length > 0) {
+    fields.profile = resolveProfileCandidates(
+      profileValues,
+      readEnv(env, ENV_PROFILE_OUT),
+      storeFile,
+      renderSigningMaterialEnvHelp,
+    )
+  }
+  if (keyAliasEnv !== undefined) {
+    if (/[\r\n\0]/.test(keyAliasEnv) || keyAliasEnv.trim() === '') {
+      throw new UsageError('HARMONY_KEY_ALIAS 不能为空，也不能包含换行或 NUL 字符', renderSigningMaterialEnvHelp())
+    }
+    fields.keyAlias = keyAliasEnv
+  }
+  if (signAlgEnv !== undefined) {
+    if (/[\r\n\0]/.test(signAlgEnv) || signAlgEnv.trim() === '') {
+      throw new UsageError('HARMONY_SIGN_ALG 不能为空，也不能包含换行或 NUL 字符', renderSigningMaterialEnvHelp())
+    }
+    fields.signAlg = signAlgEnv
+  }
+
+  let materialDir
+  let materialNote
+  if (keyPasswordEnv !== undefined && storePasswordEnv === undefined) {
+    throw new UsageError(
+      '只给 HARMONY_KEY_PASSWORD 时还需要 HARMONY_STORE_PASSWORD，才能校验 / 加密',
+      renderSigningMaterialEnvHelp(),
+    )
+  }
+  if (storePasswordEnv !== undefined) {
+    if (storeFile === undefined) {
+      throw new UsageError('更新口令需要 material.storeFile 或 HARMONY_STORE_FILE', renderSigningMaterialEnvHelp())
+    }
+    if (/[\r\n\0]/.test(storePasswordEnv)) {
+      throw new UsageError('HARMONY_STORE_PASSWORD 不能包含换行或 NUL 字符', renderSigningMaterialEnvHelp())
+    }
+    const keyPassword = keyPasswordEnv ?? storePasswordEnv
+    if (/[\r\n\0]/.test(keyPassword)) {
+      throw new UsageError('HARMONY_KEY_PASSWORD 不能包含换行或 NUL 字符', renderSigningMaterialEnvHelp())
+    }
+
+    let alias = keyAliasEnv ?? stringField(entry.text, 'keyAlias')
+    const noKeytool = options.get(OPTION_NO_KEYTOOL) === true
+    if (!noKeytool) {
+      if (!keytoolAvailable()) {
+        if (!alias) {
+          throw new UsageError(
+            'PATH 上没有 keytool，无法自动识别 .p12 的密钥别名；请用 HARMONY_KEY_ALIAS 指定',
+            renderSigningMaterialEnvHelp(),
+          )
+        }
+        stderr('警告: 没有找到 keytool，跳过「口令 / 别名能否打开 .p12」的自检')
+      } else {
+        if (!alias) {
+          const found = discoverAlias(storeFile, storePasswordEnv)
+          if (!found.ok) {
+            throw new UsageError(`keytool 读不出 .p12 的别名: ${found.detail}`, renderSigningMaterialEnvHelp())
+          }
+          alias = found.alias
+          fields.keyAlias = alias
+          stderr(`从 .p12 读取到密钥别名: ${alias}`)
+        }
+        const pair = verifyPasswordPair(storeFile, storePasswordEnv, keyPassword, alias)
+        if (!pair.ok) {
+          throw new UsageError(
+            `keytool 用这套口令打不开别名 ${alias} 的私钥: ${pair.detail}`,
+            renderSigningMaterialEnvHelp(),
+          )
+        }
+        stderr(`keytool 自检通过: 别名 ${alias} 的私钥可以用这套口令打开`)
+      }
+    } else if (!alias) {
+      throw new UsageError(
+        '--no-keytool 需要同时用 HARMONY_KEY_ALIAS 指定别名',
+        renderSigningMaterialEnvHelp(),
+      )
+    }
+
+    materialDir = path.join(path.dirname(storeFile), 'material')
+    const prepared = prepareMaterial(
+      materialDir,
+      options.get(OPTION_NEW_MATERIAL) === true,
+      renderSigningMaterialEnvHelp,
+    )
+    materialNote = prepared.note
+    const storePasswordHex = encryptSecret(prepared.workKey, storePasswordEnv)
+    const keyPasswordHex = encryptSecret(prepared.workKey, keyPassword)
+    for (const [label, hex, plain] of [
+      ['storePassword', storePasswordHex, storePasswordEnv],
+      ['keyPassword', keyPasswordHex, keyPassword],
+    ]) {
+      if (decryptSecret(materialDir, hex, label) !== plain) {
+        throw new Error(`${label} 加密后解不回原文（这是本工具的 bug，请不要写进配置）`)
+      }
+    }
+    fields.storePassword = storePasswordHex
+    fields.keyPassword = keyPasswordHex
+  }
+
+  if (Object.keys(fields).length === 0) {
+    throw new UsageError(
+      '没有可替换的 HARMONY_* 材料变量；至少提供 store/cert/profile/alias/signAlg/password 之一',
+      renderSigningMaterialEnvHelp(),
+    )
+  }
+
+  const patched = patchMaterialFields(configText, entry, fields, renderSigningMaterialEnvHelp())
+  const backup = writePatchedConfig(
+    configFile,
+    patched,
+    targetName,
+    fields,
+    renderSigningMaterialEnvHelp(),
+  )
+
+  const lines = [
+    `配置: ${configFile}`,
+    `签名配置: ${targetName}`,
+    '替换:',
+  ]
+  for (const key of ['storeFile', 'certpath', 'profile', 'keyAlias', 'signAlg']) {
+    if (fields[key] !== undefined) {
+      lines.push(`- ${key}=${fields[key]}`)
+    }
+  }
+  if (fields.storePassword !== undefined) {
+    lines.push('- storePassword: 已更新')
+    lines.push('- keyPassword: 已更新')
+  }
+  if (materialDir !== undefined) {
+    lines.push(`material: ${materialDir}（${materialNote}）`)
+  }
+  lines.push(`备份: ${backup}`)
+  stderr(`已用环境变量替换 ${targetName} 的 material 字段；备份在 ${backup}`)
+  stdout(lines.join('\n'))
+  return EXIT_OK
 }
 
 // ------------------------------------------------------------------ 命令入口

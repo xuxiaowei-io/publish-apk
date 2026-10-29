@@ -45,6 +45,7 @@ build/
 *.p12.bak-*
 *.jks.bak-*
 *.keystore.bak-*
+build-profile.json5
 
 # 签名配置 --write 的改前备份
 .signing/
