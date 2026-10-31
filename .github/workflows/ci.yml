@@ -35,7 +35,12 @@ jobs:
           openssl version
 
       - name: Check syntax
-        run: for file in src/*.js; do node --check "$file"; done
+        run: for file in src/*.js tests/*.js tests/*.mjs; do node --check "$file"; done
+
+      - name: Test sealed box and GitHub client
+        run: |
+          node tests/sealed-box.test.js
+          node tests/github.test.js
 
       - name: Smoke test CLI
         run: |
@@ -331,6 +336,61 @@ jobs:
             Buffer.from(v.HARMONY_STORE_FILE_BASE64, "base64");
           ' "$tmp/signing-env-out.json"
 
+          # signing-env --github：用本地 API 桩验证 REST 写入（不联网、不需要 gh）
+          MOCK_GITHUB_LOG="$tmp/github-calls.jsonl" \
+            node tests/mock-github-server.mjs > "$tmp/github-port.txt" &
+          github_pid=$!
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            test -s "$tmp/github-port.txt" && break
+            sleep 0.1
+          done
+          if [ ! -s "$tmp/github-port.txt" ]; then
+            echo 'mock GitHub server 未启动' >&2
+            exit 1
+          fi
+          if ! GITHUB_TOKEN=ci-token \
+            GITHUB_API_URL="http://127.0.0.1:$(cat "$tmp/github-port.txt")" \
+            node src/publish-apk.js huawei signing-env \
+            --config "$tmp/passwords-profile.json5" --name default \
+            --github --github-repo example/repo --github-env production \
+            > "$tmp/signing-env-github.txt" 2> "$tmp/signing-env-github.err"; then
+            kill "$github_pid" 2>/dev/null || true
+            cat "$tmp/signing-env-github.err" >&2
+            exit 1
+          fi
+          kill "$github_pid" 2>/dev/null || true
+          wait "$github_pid" 2>/dev/null || true
+          test "$(grep -c '^- HARMONY_' "$tmp/signing-env-github.txt")" -eq 7
+          test "$(grep -c '"method":"PUT"' "$tmp/github-calls.jsonl")" -eq 7
+          grep -q '"authorization":"Bearer ci-token"' "$tmp/github-calls.jsonl"
+          grep -q '/repos/example/repo/environments/production/secrets/HARMONY_STORE_FILE_BASE64' \
+            "$tmp/github-calls.jsonl"
+          node -e '
+            const fs = require("node:fs");
+            const calls = fs.readFileSync(process.argv[1], "utf8").trim().split("\n").map(JSON.parse);
+            const puts = calls.filter((call) => call.method === "PUT");
+            if (puts.length !== 7) throw new Error("expected 7 PUTs");
+            const stdout = fs.readFileSync(process.argv[2], "utf8");
+            for (const put of puts) {
+              if (put.body.key_id !== "test-key") throw new Error("bad key_id");
+              const raw = Buffer.from(put.body.encrypted_value, "base64");
+              if (raw.length < 48) throw new Error("encrypted_value too short");
+              if (stdout.includes(put.body.encrypted_value)) {
+                throw new Error("encrypted_value leaked to stdout");
+              }
+              const keys = Object.keys(put.body).sort().join(",");
+              if (keys !== "encrypted_value,key_id") {
+                throw new Error("unexpected request body keys: " + keys);
+              }
+            }
+          ' "$tmp/github-calls.jsonl" "$tmp/signing-env-github.txt"
+          # --github 与 --format 互斥（这条在本地参数校验阶段失败，不会发请求）
+          if GITHUB_TOKEN=ci-token node src/publish-apk.js huawei signing-env \
+            --config "$tmp/passwords-profile.json5" --name default \
+            --github --format json > /dev/null 2>&1; then
+            echo 'signing-env --github 与 --format 应当互斥' >&2
+            exit 1
+          fi
 
           # signing-material-env：HARMONY_* 先校验再替换 material
           cat > "$tmp/material-env.json5" <<EOF

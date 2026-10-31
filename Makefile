@@ -466,7 +466,7 @@ huawei-signing-material-env: ## 华为 用 HARMONY_* 环境变量校验并替换
 huawei-signing-env-help: ## 华为 按产品导出签名 CI 变量帮助文档
 	node src/publish-apk.js huawei signing-env --help
 
-huawei-signing-env: ## 华为 按产品导出鸿蒙签名 CI 变量（HARMONY_CONFIG / HARMONY_PRODUCT / HARMONY_SIGNING_NAME 可用；HARMONY_ARGS 传 --format）
+huawei-signing-env: ## 华为 按产品导出鸿蒙签名 CI 变量（HARMONY_CONFIG / HARMONY_PRODUCT / HARMONY_SIGNING_NAME 可用；HARMONY_ARGS 传 --format 或 --github --github-repo owner/repo）
 	@node src/publish-apk.js huawei signing-env $(call harmonyOption,HARMONY_CONFIG,--config) $(call harmonyOption,HARMONY_PRODUCT,--product) $(call harmonyOption,HARMONY_SIGNING_NAME,--name) $(HARMONY_ARGS)
 
 # ------------------------------------------------------------- Google Play

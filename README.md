@@ -36,6 +36,8 @@
 - 查看 PKCS#12（如 `storeFile.p12`）需要系统 `openssl` 命令（OpenSSL 1.1.1+ / LibreSSL）；其它功能只依赖 Node 内置模块
 - `keystore` 校验 Android 签名密钥库需要 JDK 的 `keytool`（`KEYTOOL=/path/to/keytool` 可指定）
 - `huawei signing-config` 的 keytool 自检是可选的：没有 JDK / keytool 时用 `--key-alias` 指定别名即可
+- 一键把鸿蒙签名变量写入 GitHub Actions 密钥（`huawei signing-env --github`）需要环境变量
+  `GITHUB_TOKEN`（仓库 Secrets 写权限）；加密用 Node 内置模块实现，不需要 `gh` / libsodium
 
 ## 安装
 
@@ -104,6 +106,7 @@ publish-apk huawei signing-material --config ./build-profile.json5 \
 HARMONY_STORE_FILE_BASE64=... HARMONY_CERTPATH_BASE64=... \
   HARMONY_PROFILE_BASE64=... publish-apk huawei signing-material-env  # 用 HARMONY_* 校验并替换 material
 publish-apk huawei signing-env --config ./build-profile.json5 --product prod  # 导出鸿蒙签名 CI 变量
+publish-apk huawei signing-env --config ./build-profile.json5 --product prod --github  # 一键写入 GitHub Actions 密钥
 ```
 
 `google` 子命令（Google Play）：
@@ -446,7 +449,7 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 | `huawei signing-passwords` | 只补充已有 `build-profile.json5` 的 `keyPassword` / `storePassword` | 补充结果 |
 | `huawei signing-material` | 用 `--set 字段=值` 替换 material 字段 | 替换结果 |
 | `huawei signing-material-env` | 用 `HARMONY_*` 环境变量先校验再替换 material | 替换结果 |
-| `huawei signing-env` | 按产品导出鸿蒙签名 CI 变量（BASE64 / 口令） | 七个 `HARMONY_*` 变量 |
+| `huawei signing-env` | 按产品导出鸿蒙签名 CI 变量（BASE64 / 口令），可一键写入 GitHub Actions 密钥 | 七个 `HARMONY_*` 变量；`--github` 时只列变量名 |
 
 #### 上传与鉴权类命令的共用选项
 
@@ -816,17 +819,27 @@ publish-apk huawei signing-material-env \
 | `--config <文件>` | 否 | `HARMONY_CONFIG` | `build-profile.json5` 路径，默认 `./build-profile.json5` |
 | `--product <产品>` | 否 | `HARMONY_PRODUCT` | 按产品名找它挂的 `signingConfig` |
 | `--name <名字>` | 否 | `HARMONY_SIGNING_NAME` | 不按产品时直接指定 `signingConfig`，默认 `default` |
-| `--format <env/shell/json>` | 否 | — | 输出格式，默认 `env`；`shell` 用单引号安全转义，`json` 便于脚本解析 |
-| `--separator <字符>` | 否 | — | `env` 格式的分隔符，默认 `=`；只支持 `=` 与 `:`，且不能用于其它格式 |
+| `--format <env/shell/json>` | 否 | — | 输出格式，默认 `env`；`shell` 用单引号安全转义，`json` 便于脚本解析；不能与 `--github` 同用 |
+| `--separator <字符>` | 否 | — | `env` 格式的分隔符，默认 `=`；只支持 `=` 与 `:`，且不能用于其它格式；不能与 `--github` 同用 |
+| `--github` | 否 | — | 经 GitHub REST API 把七个变量写入 Actions 密钥（用 `GITHUB_TOKEN`）；stdout 只列变量名 |
+| `--github-repo <owner/repo>` | 否 | — | 目标仓库；默认取 `GITHUB_REPOSITORY` 或当前 git remote；给出即启用 `--github` |
+| `--github-env <环境>` | 否 | — | 写入 GitHub Environment 密钥（环境需已存在）；给出即启用 `--github` |
 
 ```bash
 publish-apk huawei signing-env --config ./build-profile.json5 --product prod
 
 # 冒号分隔：HARMONY_*: "..."
 publish-apk huawei signing-env --config ./build-profile.json5 --product prod --separator :
+
+# 一键写入当前仓库的 GitHub Actions 密钥（需 GITHUB_TOKEN）
+publish-apk huawei signing-env --config ./build-profile.json5 --product prod --github
+
+# 指定仓库与 GitHub Environment
+publish-apk huawei signing-env --config ./build-profile.json5 --product prod \
+  --github --github-repo owner/repo --github-env production
 ```
 
-输出：
+默认输出：
 
 ```text
 HARMONY_STORE_FILE_BASE64="..."
@@ -843,7 +856,41 @@ HARMONY_SIGN_ALG="SHA256withECDSA"
 - 要求 `material` 与 `material.storeFile` 指向的 `.p12` 同级，且口令能用 material 解密。
 - p12 / 证书 / Profile 路径相对 `build-profile.json5` 解析；文件必须存在。
 - `--format env|shell|json`，默认 `env`；`shell` 用单引号安全转义，`json` 便于脚本解析。
-- **警告：stdout 包含明文口令**，不要写入日志、提交仓库或公开分享。
+- **警告：默认 stdout 包含明文口令**，不要写入日志、提交仓库或公开分享；用 `--github`
+  可以完全不在终端显示值。
+
+#### 一键写入 GitHub Actions 密钥（`--github`）
+
+`--github` 不把值打印到终端，而是逐个通过 GitHub REST API 写入 Actions 密钥，
+stdout 只有目标和变量名：
+
+```text
+GitHub 仓库: owner/repo
+密钥范围: Environment（production）
+已写入 7 个密钥:
+- HARMONY_STORE_FILE_BASE64
+- HARMONY_PROFILE_BASE64
+- HARMONY_CERTPATH_BASE64
+- HARMONY_STORE_PASSWORD
+- HARMONY_KEY_PASSWORD
+- HARMONY_KEY_ALIAS
+- HARMONY_SIGN_ALG
+```
+
+- 需要环境变量 `GITHUB_TOKEN`，且令牌有目标仓库的 **Secrets 写权限**：
+  fine-grained token 勾选 `Secrets: Read and write`，classic token 选 `repo`。
+- GitHub Actions 自动注入的 `GITHUB_TOKEN` 通常**不能写 Secrets**；CI 里请把有权限的 PAT
+  存成 Secret，再以 `GITHUB_TOKEN` 传给本命令，例如 `GITHUB_TOKEN: ${{ secrets.GH_PAT }}`。
+- 值在本地用 libsodium sealed box（`crypto_box_seal`）加密后上传；请求体里只有
+  `encrypted_value` 与 `key_id`，明文不落地；错误信息只带变量名，不回显值。
+- 省略 `--github-repo` 时先看 `GITHUB_REPOSITORY`（Actions 自动注入），再按当前 git
+  remote 的 origin 推断；GitHub Enterprise 用 `GITHUB_API_URL=https://host/api/v3` 指定 API 地址。
+- 七个变量一次写完；某个失败时错误会指出失败项与已成功写入的个数，重跑即可（同名密钥被覆盖）。
+- 48 KB 上限按加密后的 `encrypted_value` 计算，超过时本地直接失败，不会发起请求。
+- `--github-env` 要求对应的 GitHub Environment 已存在；否则 GitHub 返回 404。
+- `--github` 不能与 `--format` / `--separator` 同时使用；后两者只控制 stdout。
+- 写入后在 workflow 里用 `${{ secrets.HARMONY_STORE_FILE_BASE64 }}` 等引用即可，
+  `huawei signing-material-env` 直接读取同名的 `HARMONY_*` 环境变量。
 
 ### 上传一个安装包分三步
 
@@ -1268,6 +1315,16 @@ publish-apk huawei service-account-upload-url
 | `HARMONY_SIGNING_NAME` | `--name` | 要更新/输出的 signingConfig 名字，默认 `default` |
 | `HARMONY_PRODUCT` | `--product` | 按产品名找它挂的 signingConfig 作为名字 |
 
+### GitHub Actions 密钥（`GITHUB_*`）
+
+只用于 `huawei signing-env --github`；不会影响其它命令。
+
+| 环境变量 | 等价选项 | 说明 |
+| --- | --- | --- |
+| `GITHUB_TOKEN` | — | `--github` 必填；需要仓库 Secrets 写权限（fine-grained 的 Secrets 读写，classic 的 `repo`） |
+| `GITHUB_REPOSITORY` | `--github-repo` | `owner/repo`；Actions 自动注入；未给 `--github-repo` 时用它 |
+| `GITHUB_API_URL` | — | API 地址，默认 `https://api.github.com`；GitHub Enterprise 用 `https://host/api/v3` |
+
 ### Google Play（`GOOGLE_*`）
 
 | 环境变量 | 等价选项 | 说明 |
@@ -1334,6 +1391,7 @@ publish-apk google upload-aab
 - `profile` 的 `--verbose` / `PROFILE_VERBOSE` 输出全部 profile JSON 字段与证书字段，信息同样写 `stdout`。
 - `keystore` 的 `stdout` 是校验结果（密钥库 / 大小 / 类型 / 别名 / 公钥 / 证书 / 校验结论），落盘与备份路径写 `stderr`；口令不会打印。
 - `huawei signing-config` 的 `stdout` 是 `signingConfig` JSON（含密文口令），保持纯 JSON；`.p12` / `.cer` / `.p7b` 材料信息、material 路径、keytool 自检结果与 `--write` 备份路径都写 `stderr`；明文口令不会打印。
+- `huawei signing-env` 默认 `stdout` 是七个 `HARMONY_*` 变量（含明文口令）；`--github` 时 `stdout` 只有写入结果（仓库 / 范围 / 变量名），值不输出。
 - 用法错误（参数缺失、参数非法）：先输出对应帮助文档（`stdout`）、再输出错误（`stderr`），退出代码 `1`。
 - 退出代码：`0` 成功，`1` 参数缺失、参数错误或调用失败。
 
@@ -1369,6 +1427,8 @@ HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-passwords HARMONY_CONFIG=
 make huawei-signing-material HARMONY_CONFIG=./build-profile.json5 HARMONY_ARGS="--set storeFile=./storeFile.p12 --set keyAlias=release"
 HARMONY_STORE_FILE_BASE64=... make huawei-signing-material-env HARMONY_CONFIG=./build-profile.json5 HARMONY_SIGNING_NAME=default
 make huawei-signing-env HARMONY_CONFIG=./build-profile.json5 HARMONY_PRODUCT=prod HARMONY_ARGS="--format env"
+make huawei-signing-env HARMONY_CONFIG=./build-profile.json5 HARMONY_PRODUCT=prod \
+  HARMONY_ARGS="--github --github-repo owner/repo"   # 一键写入 GitHub Actions 密钥
 make huawei-signing-passwords-help               # 只补充 keyPassword/storePassword 帮助
 make huawei-help                                 # huawei 子命令帮助
 make huawei-service-account HUAWEI_KID=xxx HUAWEI_PRIVATE_KEY=./private.pem
@@ -1385,7 +1445,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 

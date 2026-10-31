@@ -15,6 +15,9 @@
  *   - 明文口令不会出现在输出里；--store-password 会进 shell 历史 / ps，建议用
  *     HARMONY_STORE_PASSWORD 环境变量，或在终端里交互输入；
  *   - material 是解开密文的唯一钥匙，不能删、不能入库。
+ *
+ * `publish-apk huawei signing-env` 是反向操作：从 build-profile.json5 解出 CI 变量；
+ * 加 --github 时改为通过 GitHub REST API 一键写入 Actions 密钥，stdout 只列变量名。
  */
 import { spawnSync } from 'node:child_process'
 import { createHash, randomBytes, X509Certificate } from 'node:crypto'
@@ -34,6 +37,12 @@ import {
   stdout,
 } from './cli.js'
 import { certificateDetailLines, readPkcs12, renderPkcs12 } from './cert.js'
+import {
+  resolveGithubApiUrl,
+  resolveGithubRepo,
+  resolveGithubToken,
+  setGithubSecrets,
+} from './github.js'
 import { decryptSecret, encryptSecret, generateMaterial, readMaterialKey } from './harmony-material.js'
 import { profileInfoLines } from './profile.js'
 import { normalizePemText } from './jwt.js'
@@ -69,6 +78,10 @@ const OPTION_REQUIRE_ALL = '--require-all'
 const OPTION_FORMAT = '--format'
 const OPTION_SEPARATOR = '--separator'
 const OPTION_VERBOSE = '--verbose'
+/** signing-env：把导出的变量直接写入 GitHub Actions 密钥（GitHub REST API + GITHUB_TOKEN） */
+const OPTION_GITHUB = '--github'
+const OPTION_GITHUB_REPO = '--github-repo'
+const OPTION_GITHUB_ENV = '--github-env'
 
 const SIGNING_OPTIONS = new Set([
   OPTION_STORE_FILE,
@@ -128,8 +141,17 @@ const MATERIAL_ENV_OPTIONS = new Set([
 ])
 const MATERIAL_ENV_FLAGS = new Set([OPTION_NO_KEYTOOL, OPTION_NEW_MATERIAL, OPTION_REQUIRE_ALL])
 
-const ENV_OPTIONS = new Set([OPTION_CONFIG, OPTION_PRODUCT, OPTION_NAME, OPTION_FORMAT, OPTION_SEPARATOR])
-const ENV_FLAGS = new Set()
+const ENV_OPTIONS = new Set([
+  OPTION_CONFIG,
+  OPTION_PRODUCT,
+  OPTION_NAME,
+  OPTION_FORMAT,
+  OPTION_SEPARATOR,
+  OPTION_GITHUB,
+  OPTION_GITHUB_REPO,
+  OPTION_GITHUB_ENV,
+])
+const ENV_FLAGS = new Set([OPTION_GITHUB])
 
 const ENV_STORE_FILE = 'HARMONY_STORE_FILE'
 const ENV_STORE_FILE_BASE64 = 'HARMONY_STORE_FILE_BASE64'
@@ -722,7 +744,7 @@ function renderSigningEnvHelp() {
           ],
           [
             '输出',
-            'HARMONY_STORE_FILE_BASE64 / HARMONY_PROFILE_BASE64 / HARMONY_CERTPATH_BASE64 / HARMONY_STORE_PASSWORD / HARMONY_KEY_PASSWORD / HARMONY_KEY_ALIAS / HARMONY_SIGN_ALG',
+            '七个 HARMONY_* 变量；加 --github 时改为写入 GitHub Actions 密钥（stdout 只列变量名）',
           ],
         ],
       },
@@ -735,8 +757,11 @@ function renderSigningEnvHelp() {
           ],
           [`${OPTION_PRODUCT} <产品>`, `按 products[].name 找到它挂的 signingConfig（可用 ${ENV_PRODUCT} 补齐）`],
           [`${OPTION_NAME} <名字>`, `不按产品时直接指定 signingConfig，默认 ${DEFAULT_NAME}（可用 ${ENV_NAME} 补齐）`],
-          [OPTION_FORMAT, '输出格式：env（默认）/ shell / json'],
-          [OPTION_SEPARATOR, 'env 输出的分隔符：默认 =；可设为 :'],
+          [OPTION_FORMAT, '输出格式：env（默认）/ shell / json；与 --github 不能同时使用'],
+          [OPTION_SEPARATOR, 'env 输出的分隔符：默认 =；可设为 :；与 --github 不能同时使用'],
+          [OPTION_GITHUB, '经 GitHub REST API 写入 Actions 密钥（用 GITHUB_TOKEN）'],
+          [`${OPTION_GITHUB_REPO} <owner/repo>`, '目标仓库；默认取 GITHUB_REPOSITORY 或当前 git remote；给出即启用 --github'],
+          [`${OPTION_GITHUB_ENV} <环境>`, '写入 GitHub Environment 密钥（环境需已存在）；给出即启用 --github'],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -746,20 +771,23 @@ function renderSigningEnvHelp() {
           [ENV_CONFIG, `等价于 ${OPTION_CONFIG}`],
           [ENV_PRODUCT, `等价于 ${OPTION_PRODUCT}`],
           [ENV_NAME, `等价于 ${OPTION_NAME}`],
+          ['GITHUB_TOKEN', '--github 必填：需要仓库 Secrets 写权限（fine-grained 的 Secrets 读写；classic 的 repo）'],
+          ['GITHUB_REPOSITORY', '--github 可选：owner/repo，GitHub Actions 自动注入'],
+          ['GITHUB_API_URL', '--github 可选：API 地址，默认 https://api.github.com（GHES 用 .../api/v3）'],
         ],
       },
       {
         title: '输出',
         entries: [
-          ['stdout', '七个 HARMONY_* 变量（BASE64 单行；口令为明文）'],
-          ['stderr', '明文口令警告与错误信息'],
+          ['stdout', '默认七个 HARMONY_* 变量（BASE64 单行；口令为明文）；--github 时只列写入的变量名'],
+          ['stderr', '明文口令警告与错误信息；--github 时不输出任何值'],
         ],
       },
       {
         title: '退出代码',
         entries: [
           ['0', '成功'],
-          ['1', '配置 / 产品 / material / 文件校验失败或口令解密失败'],
+          ['1', '配置 / 产品 / material / 文件校验失败、口令解密失败或 GitHub 写入失败'],
         ],
       },
     ],
@@ -768,8 +796,15 @@ function renderSigningEnvHelp() {
       `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --product prod`,
       `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --product prod --format shell`,
       `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --name default --format json`,
+      `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --product prod --github`,
+      `  ${PROGRAM} huawei ${ENV_COMMAND_NAME} --config ./build-profile.json5 --product prod --github \\`,
+      `    --github-repo owner/repo --github-env production`,
       '',
-      '警告: stdout 包含明文口令，不要写入日志、提交仓库或公开分享',
+      '警告: 默认输出包含明文口令，不要写入日志、提交仓库或公开分享',
+      '说明: --github 直接调 GitHub REST API，不依赖 gh CLI；值用 libsodium sealed box 加密后上传',
+      '说明: Actions 内置的 GITHUB_TOKEN 通常不能写 Secrets；CI 里请用有 Secrets 写权限的 PAT',
+      '说明: --github-env 要求对应的 GitHub Environment 已存在',
+      '说明: --github 与 --format / --separator 不能同时使用（后两者只控制 stdout）',
       '说明: material 必须与 material.storeFile 指向的 .p12 同级；本命令只读不写',
       '说明: p12 / 证书 / Profile 必须存在，口令必须能用 material 解密',
     ],
@@ -2057,13 +2092,49 @@ function fileBase64(file, label, help) {
 }
 
 /** 导出 build-profile.json5 对应产品的 CI 变量 */
-export function runHuaweiSigningEnv(argv, env) {
+export async function runHuaweiSigningEnv(argv, env) {
   if (argv.some((token) => isHelpToken(token))) {
     stdout(renderSigningEnvHelp())
     return EXIT_OK
   }
 
   const options = parseOptions(argv, ENV_OPTIONS, renderSigningEnvHelp, ENV_FLAGS)
+
+  // GitHub 写入的配置先在本地校验完（仓库 / token / API 地址），再读 material：
+  // token 缺失这类错误不该等到解完密文口令才报出来。
+  const githubRepoOption = options.get(OPTION_GITHUB_REPO)
+  const githubEnvironment = options.get(OPTION_GITHUB_ENV)
+  const github =
+    options.get(OPTION_GITHUB) === true ||
+    githubRepoOption !== undefined ||
+    githubEnvironment !== undefined
+  let githubTarget
+  if (github) {
+    if (options.has(OPTION_FORMAT)) {
+      throw new UsageError(
+        `${OPTION_GITHUB} 不能与 ${OPTION_FORMAT} 一起使用：写入 GitHub 时 stdout 只输出变量名`,
+        renderSigningEnvHelp(),
+      )
+    }
+    if (options.has(OPTION_SEPARATOR)) {
+      throw new UsageError(
+        `${OPTION_GITHUB} 不能与 ${OPTION_SEPARATOR} 一起使用：分隔符只用于 stdout`,
+        renderSigningEnvHelp(),
+      )
+    }
+    if (githubRepoOption !== undefined && !/^[^\s/]+\/[^\s/]+$/.test(githubRepoOption)) {
+      throw new UsageError(
+        `${OPTION_GITHUB_REPO} 需要 owner/repo 形式，实际: ${githubRepoOption}`,
+        renderSigningEnvHelp(),
+      )
+    }
+    githubTarget = {
+      repo: resolveGithubRepo(githubRepoOption, env),
+      token: resolveGithubToken(env),
+      apiUrl: resolveGithubApiUrl(env),
+    }
+  }
+
   const configFile = path.resolve(
     options.get(OPTION_CONFIG) ?? readEnv(env, ENV_CONFIG) ?? DEFAULT_CONFIG,
   )
@@ -2134,6 +2205,29 @@ export function runHuaweiSigningEnv(argv, env) {
 
   const format = String(options.get(OPTION_FORMAT) ?? 'env').trim().toLowerCase()
   const separator = options.get(OPTION_SEPARATOR)
+
+  // 写入 GitHub Actions 密钥：显式 --github，或给了 --github-repo / --github-env（后两者隐含 --github）。
+  // 这条路径不输出任何值；值只在内存里用 libsodium sealed box 加密后 PUT 给 GitHub。
+  if (github) {
+    const written = await setGithubSecrets(variables, {
+      repo: githubTarget.repo.full,
+      environment: githubEnvironment,
+      token: githubTarget.token,
+      apiUrl: githubTarget.apiUrl,
+    })
+    const scope =
+      githubEnvironment === undefined ? '仓库' : `Environment（${githubEnvironment}）`
+    stdout(
+      [
+        `GitHub 仓库: ${githubTarget.repo.full}`,
+        `密钥范围: ${scope}`,
+        `已写入 ${written.length} 个密钥:`,
+        ...written.map((item) => `- ${item}`),
+      ].join('\n'),
+    )
+    return EXIT_OK
+  }
+
   if (separator !== undefined && format !== 'env') {
     throw new UsageError(`--separator 只用于 env 格式；当前是 ${format}`, renderSigningEnvHelp())
   }

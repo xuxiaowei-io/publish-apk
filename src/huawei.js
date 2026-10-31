@@ -2443,7 +2443,7 @@ function renderHuaweiHelp() {
           ['signing-passwords', '只补充 build-profile.json5 的 keyPassword / storePassword'],
           ['signing-material', '替换 build-profile.json5 的 material 字段'],
           ['signing-material-env', '用 HARMONY_* 环境变量校验并替换 material'],
-          ['signing-env', '按产品导出鸿蒙签名 CI 环境变量'],
+          ['signing-env', '按产品导出鸿蒙签名 CI 变量（可写入 GitHub 密钥）'],
           ['help', '显示帮助信息'],
         ],
       },
