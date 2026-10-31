@@ -7,7 +7,8 @@
  * 新增厂商时实现 runXxx(argv, env) 并在下面 VENDORS 注册一行即可；
  * 与厂商无关的工具命令（当前有 src/cert.js、src/profile.js、src/hap.js、src/apk.js、src/keystore.js）注册到 TOOLS。
  * apk.js 同时导出 apk / aab 两个命令：APK 与 AAB 的 Android 包查看工具。
- * keystore.js 同时导出 keystore / keystore-env / keystore-gen：Android keystore 校验、CI 变量导出与快速生成。
+ * keystore.js 同时导出 keystore / keystore-env / keystore-gen：Android keystore 校验、CI 变量导出
+ * （keystore-env 支持 --github 写入 GitHub 密钥）与快速生成。
  * hap.js 同时导出 hap / app 两个命令：HAP 单模块包与 APP 多模块包的查看工具。
  *
  * 根命令已支持的行为：

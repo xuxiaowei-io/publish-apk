@@ -38,9 +38,13 @@ import {
 } from './cli.js'
 import { certificateDetailLines, readPkcs12, renderPkcs12 } from './cert.js'
 import {
-  resolveGithubApiUrl,
-  resolveGithubRepo,
-  resolveGithubToken,
+  GITHUB_OPTION_FLAGS,
+  GITHUB_OPTION_NAMES,
+  OPTION_GITHUB,
+  OPTION_GITHUB_ENV,
+  OPTION_GITHUB_REPO,
+  renderGithubResult,
+  resolveGithubTarget,
   setGithubSecrets,
 } from './github.js'
 import { decryptSecret, encryptSecret, generateMaterial, readMaterialKey } from './harmony-material.js'
@@ -78,10 +82,6 @@ const OPTION_REQUIRE_ALL = '--require-all'
 const OPTION_FORMAT = '--format'
 const OPTION_SEPARATOR = '--separator'
 const OPTION_VERBOSE = '--verbose'
-/** signing-env：把导出的变量直接写入 GitHub Actions 密钥（GitHub REST API + GITHUB_TOKEN） */
-const OPTION_GITHUB = '--github'
-const OPTION_GITHUB_REPO = '--github-repo'
-const OPTION_GITHUB_ENV = '--github-env'
 
 const SIGNING_OPTIONS = new Set([
   OPTION_STORE_FILE,
@@ -147,11 +147,9 @@ const ENV_OPTIONS = new Set([
   OPTION_NAME,
   OPTION_FORMAT,
   OPTION_SEPARATOR,
-  OPTION_GITHUB,
-  OPTION_GITHUB_REPO,
-  OPTION_GITHUB_ENV,
+  ...GITHUB_OPTION_NAMES,
 ])
-const ENV_FLAGS = new Set([OPTION_GITHUB])
+const ENV_FLAGS = new Set(GITHUB_OPTION_FLAGS)
 
 const ENV_STORE_FILE = 'HARMONY_STORE_FILE'
 const ENV_STORE_FILE_BASE64 = 'HARMONY_STORE_FILE_BASE64'
@@ -2102,38 +2100,7 @@ export async function runHuaweiSigningEnv(argv, env) {
 
   // GitHub 写入的配置先在本地校验完（仓库 / token / API 地址），再读 material：
   // token 缺失这类错误不该等到解完密文口令才报出来。
-  const githubRepoOption = options.get(OPTION_GITHUB_REPO)
-  const githubEnvironment = options.get(OPTION_GITHUB_ENV)
-  const github =
-    options.get(OPTION_GITHUB) === true ||
-    githubRepoOption !== undefined ||
-    githubEnvironment !== undefined
-  let githubTarget
-  if (github) {
-    if (options.has(OPTION_FORMAT)) {
-      throw new UsageError(
-        `${OPTION_GITHUB} 不能与 ${OPTION_FORMAT} 一起使用：写入 GitHub 时 stdout 只输出变量名`,
-        renderSigningEnvHelp(),
-      )
-    }
-    if (options.has(OPTION_SEPARATOR)) {
-      throw new UsageError(
-        `${OPTION_GITHUB} 不能与 ${OPTION_SEPARATOR} 一起使用：分隔符只用于 stdout`,
-        renderSigningEnvHelp(),
-      )
-    }
-    if (githubRepoOption !== undefined && !/^[^\s/]+\/[^\s/]+$/.test(githubRepoOption)) {
-      throw new UsageError(
-        `${OPTION_GITHUB_REPO} 需要 owner/repo 形式，实际: ${githubRepoOption}`,
-        renderSigningEnvHelp(),
-      )
-    }
-    githubTarget = {
-      repo: resolveGithubRepo(githubRepoOption, env),
-      token: resolveGithubToken(env),
-      apiUrl: resolveGithubApiUrl(env),
-    }
-  }
+  const github = resolveGithubTarget(options, env, renderSigningEnvHelp)
 
   const configFile = path.resolve(
     options.get(OPTION_CONFIG) ?? readEnv(env, ENV_CONFIG) ?? DEFAULT_CONFIG,
@@ -2208,23 +2175,14 @@ export async function runHuaweiSigningEnv(argv, env) {
 
   // 写入 GitHub Actions 密钥：显式 --github，或给了 --github-repo / --github-env（后两者隐含 --github）。
   // 这条路径不输出任何值；值只在内存里用 libsodium sealed box 加密后 PUT 给 GitHub。
-  if (github) {
+  if (github.enabled) {
     const written = await setGithubSecrets(variables, {
-      repo: githubTarget.repo.full,
-      environment: githubEnvironment,
-      token: githubTarget.token,
-      apiUrl: githubTarget.apiUrl,
+      repo: github.repo.full,
+      environment: github.environment,
+      token: github.token,
+      apiUrl: github.apiUrl,
     })
-    const scope =
-      githubEnvironment === undefined ? '仓库' : `Environment（${githubEnvironment}）`
-    stdout(
-      [
-        `GitHub 仓库: ${githubTarget.repo.full}`,
-        `密钥范围: ${scope}`,
-        `已写入 ${written.length} 个密钥:`,
-        ...written.map((item) => `- ${item}`),
-      ].join('\n'),
-    )
+    stdout(renderGithubResult(github.repo.full, github.environment, written))
     return EXIT_OK
   }
 

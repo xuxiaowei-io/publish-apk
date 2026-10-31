@@ -3,6 +3,7 @@
  *
  *   - `keystore`：校验已有 keystore 的口令 / 别名 / 私钥；
  *   - `keystore-env`：导出 CI 变量（BASE64 / 口令 / 别名）；
+ *     加 `--github` 时改为通过 GitHub REST API 一键写入 Actions 密钥，stdout 只列变量名；
  *   - `keystore-gen`：用 keytool 快速生成 PKCS12 / JKS。
  *
  * 定位：与具体应用市场无关的本地工具 —— 拿 CI 里那套 Android 签名变量
@@ -47,6 +48,16 @@ import {
   stderr,
   stdout,
 } from './cli.js'
+import {
+  GITHUB_OPTION_FLAGS,
+  GITHUB_OPTION_NAMES,
+  OPTION_GITHUB,
+  OPTION_GITHUB_ENV,
+  OPTION_GITHUB_REPO,
+  renderGithubResult,
+  resolveGithubTarget,
+  setGithubSecrets,
+} from './github.js'
 import { renderHelp } from './help.js'
 
 /** 命令名（根帮助与示例里使用） */
@@ -109,8 +120,9 @@ const ENV_OPTIONS = new Set([
   OPTION_SEPARATOR,
   OPTION_INCLUDE_FILE,
   OPTION_NO_BASE64,
+  ...GITHUB_OPTION_NAMES,
 ])
-const ENV_FLAGS = new Set([OPTION_INCLUDE_FILE, OPTION_NO_BASE64])
+const ENV_FLAGS = new Set([OPTION_INCLUDE_FILE, OPTION_NO_BASE64, ...GITHUB_OPTION_FLAGS])
 
 /** 密钥库路径，等价于 --file（也可用 ANDROID_KEYSTORE 补） */
 const ENV_FILE = 'ANDROID_KEYSTORE_FILE'
@@ -900,11 +912,14 @@ function renderKeystoreEnvHelp() {
           ],
           [
             `${OPTION_FORMAT} <env|shell|json>`,
-            '输出格式，默认 env（KEY="value"，一行一个）；shell 输出 export KEY=...；json 输出对象',
+            '输出格式，默认 env（KEY="value"，一行一个）；shell 输出 export KEY=...；json 输出对象；与 --github 不能同时使用',
           ],
-          [OPTION_SEPARATOR, 'env 输出的分隔符：默认 =；可设为 :'],
+          [OPTION_SEPARATOR, 'env 输出的分隔符：默认 =；可设为 :；与 --github 不能同时使用'],
           [OPTION_INCLUDE_FILE, '额外输出 ANDROID_KEYSTORE_FILE（绝对路径）'],
           [OPTION_NO_BASE64, '不输出 ANDROID_KEYSTORE_BASE64（本地 signing.env 用）'],
+          [OPTION_GITHUB, '经 GitHub REST API 写入 Actions 密钥（用 GITHUB_TOKEN）'],
+          [`${OPTION_GITHUB_REPO} <owner/repo>`, '目标仓库；默认取 GITHUB_REPOSITORY 或当前 git remote；给出即启用 --github'],
+          [`${OPTION_GITHUB_ENV} <环境>`, '写入 GitHub Environment 密钥（环境需已存在）；给出即启用 --github'],
           ['-h, --help', '显示帮助信息'],
         ],
       },
@@ -916,6 +931,9 @@ function renderKeystoreEnvHelp() {
           [ENV_STORE_PASSWORD, `keystore 明文口令，等价于 ${OPTION_STORE_PASSWORD}`],
           [ENV_KEY_ALIAS, `私钥别名，等价于 ${OPTION_KEY_ALIAS}`],
           [ENV_KEY_PASSWORD, `私钥明文口令，等价于 ${OPTION_KEY_PASSWORD}`],
+          ['GITHUB_TOKEN', '--github 必填：需要仓库 Secrets 写权限（fine-grained 的 Secrets 读写；classic 的 repo）'],
+          ['GITHUB_REPOSITORY', '--github 可选：owner/repo，GitHub Actions 自动注入'],
+          ['GITHUB_API_URL', '--github 可选：API 地址，默认 https://api.github.com（GHES 用 .../api/v3）'],
         ],
       },
       {
@@ -923,16 +941,16 @@ function renderKeystoreEnvHelp() {
         entries: [
           [
             'stdout',
-            '默认 ANDROID_KEYSTORE_BASE64 / PASSWORD / ALIAS / KEY_PASSWORD；加 --include-file 输出 ANDROID_KEYSTORE_FILE，加 --no-base64 去掉 BASE64',
+            '默认 ANDROID_KEYSTORE_BASE64 / PASSWORD / ALIAS / KEY_PASSWORD；加 --include-file 输出 ANDROID_KEYSTORE_FILE，加 --no-base64 去掉 BASE64；--github 时只列写入的变量名',
           ],
-          ['stderr', '明文口令警告与错误信息'],
+          ['stderr', '明文口令警告与错误信息；--github 时不输出任何值'],
         ],
       },
       {
         title: '退出代码',
         entries: [
           ['0', '成功'],
-          ['1', '参数错误、口令 / 别名校验失败或文件读取失败'],
+          ['1', '参数错误、口令 / 别名校验失败、文件读取失败或 GitHub 写入失败'],
         ],
       },
     ],
@@ -942,16 +960,25 @@ function renderKeystoreEnvHelp() {
       `  ANDROID_KEYSTORE_PASSWORD=<口令> ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format shell`,
       `  ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format json > keystore.json`,
       `  ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --format shell --include-file --no-base64 > signing.env`,
+      `  GITHUB_TOKEN=<token> ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --github`,
+      `  GITHUB_TOKEN=<token> ${PROGRAM} ${ENV_COMMAND_NAME} --file ./release.p12 --github \\`,
+      `    --github-repo owner/repo --github-env production`,
       '',
-      '警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享',
+      '警告: 默认输出包含明文口令，请勿写入日志、提交仓库或公开分享',
       '说明: 生成前会用 keytool 校验 keystore 口令、别名与私钥口令',
       '说明: ANDROID_KEYSTORE_BASE64 是单行 BASE64，可直接配置到 CI 变量',
       '说明: shell 格式用单引号安全转义，可 eval/source；env 格式适合逐项复制到 CI 变量',
+      '说明: --github 写入的变量与 stdout 同一组：默认 4 个；--include-file 加 FILE，--no-base64 去掉 BASE64',
+      '说明: --include-file 写的是本机绝对路径，CI 里未必适用；一般不要与 --github 同用',
+      '说明: --github 直接调 GitHub REST API，不依赖 gh CLI；值用 libsodium sealed box 加密后上传',
+      '说明: Actions 内置的 GITHUB_TOKEN 通常不能写 Secrets；CI 里请用有 Secrets 写权限的 PAT',
+      '说明: --github-env 要求对应的 GitHub Environment 已存在',
     ],
   })
 }
 
-function renderKeystoreEnvVariables(absolute, buffer, alias, storePassword, keyPassword, format, options, help) {
+/** 组装 keystore-env 要导出的变量；顺序与 stdout 一致，--github 也写同一组 */
+function keystoreEnvValues(absolute, buffer, alias, storePassword, keyPassword, options) {
   const values = []
   if (!options.get(OPTION_NO_BASE64)) {
     values.push(['ANDROID_KEYSTORE_BASE64', buffer.toString('base64')])
@@ -964,6 +991,11 @@ function renderKeystoreEnvVariables(absolute, buffer, alias, storePassword, keyP
     ['ANDROID_KEY_ALIAS', alias],
     ['ANDROID_KEY_PASSWORD', keyPassword],
   )
+  return values
+}
+
+/** 把变量渲染成 env / shell / json；--github 时不走这里 */
+function renderKeystoreEnvVariables(values, format, options, help) {
   if (format === 'env') {
     const separator = options.get(OPTION_SEPARATOR) ?? '='
     if (separator !== '=' && separator !== ':') {
@@ -988,6 +1020,10 @@ async function runKeystoreEnv(argv, env) {
   }
 
   const options = parseOptions(argv, ENV_OPTIONS, renderKeystoreEnvHelp, ENV_FLAGS)
+
+  // GitHub 写入的配置先在本地校验完（仓库 / token / API 地址），再做 keytool 自检：
+  // token 缺失这类错误不该等到校验完 keystore 才报出来。
+  const github = resolveGithubTarget(options, env, renderKeystoreEnvHelp)
   const fileValue =
     options.get(OPTION_FILE) ?? readEnv(env, ENV_FILE) ?? readEnv(env, ENV_KEYSTORE)
   if (fileValue === undefined) {
@@ -1029,18 +1065,33 @@ async function runKeystoreEnv(argv, env) {
     storePassword,
     keyPassword,
   })
-  stderr('警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享')
-  stdout(
-    renderKeystoreEnvVariables(
-      absolute, buffer, info.alias, storePassword, keyPassword, format, options, renderKeystoreEnvHelp(),
-    ),
+  const values = keystoreEnvValues(
+    absolute,
+    buffer,
+    info.alias,
+    storePassword,
+    keyPassword,
+    options,
   )
+  if (github.enabled) {
+    // 与 huawei signing-env 相同的写入路径：值只在内存里加密后 PUT，stdout 只列变量名
+    const written = await setGithubSecrets(values, {
+      repo: github.repo.full,
+      environment: github.environment,
+      token: github.token,
+      apiUrl: github.apiUrl,
+    })
+    stdout(renderGithubResult(github.repo.full, github.environment, written))
+    return EXIT_OK
+  }
+  stderr('警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享')
+  stdout(renderKeystoreEnvVariables(values, format, options, renderKeystoreEnvHelp()))
   return EXIT_OK
 }
 
 export const keystoreEnvCommand = {
   name: ENV_COMMAND_NAME,
-  summary: '导出 Android keystore 的 CI 变量（BASE64 / 口令 / 别名）',
+  summary: '导出 Android keystore 的 CI 变量（BASE64 / 口令 / 别名，可写入 GitHub 密钥）',
   run: runKeystoreEnv,
 }
 

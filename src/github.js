@@ -14,7 +14,20 @@
  */
 import { spawnSync } from 'node:child_process'
 
+import { UsageError } from './cli.js'
 import { SEALED_BOX_OVERHEAD, sealBox } from './sealed-box.js'
+
+/** GitHub 写入相关的命令选项；huawei signing-env 与 keystore-env 共用 */
+export const OPTION_GITHUB = '--github'
+export const OPTION_GITHUB_REPO = '--github-repo'
+export const OPTION_GITHUB_ENV = '--github-env'
+/** 可以拼进各命令 parseOptions 的选项集合 */
+export const GITHUB_OPTION_NAMES = new Set([
+  OPTION_GITHUB,
+  OPTION_GITHUB_REPO,
+  OPTION_GITHUB_ENV,
+])
+export const GITHUB_OPTION_FLAGS = new Set([OPTION_GITHUB])
 
 /** GitHub 单个密钥的上限：48 KB（按 REST API 的 encrypted_value 计） */
 export const GITHUB_SECRET_MAX_BYTES = 48 * 1024
@@ -128,6 +141,64 @@ export function resolveGithubApiUrl(env) {
   const value = env.GITHUB_API_URL
   const url = value === undefined || value.trim() === '' ? DEFAULT_API_URL : value.trim()
   return url.replace(/\/+$/, '')
+}
+
+/**
+ * 统一解析 `--github` 相关选项，`huawei signing-env` 与 `keystore-env` 共用。
+ *
+ * 启用条件：显式 `--github`，或给了 `--github-repo` / `--github-env`（后两者隐含 `--github`）。
+ * 启用时同时校验：与 `--format` / `--separator` 互斥、仓库形式、GITHUB_TOKEN，
+ * 这样 token 缺失之类的错误不会等到 keytool / material 处理完才报。
+ *
+ * @param {Map<string, string|true|string[]>} options parseOptions 的结果
+ * @param {NodeJS.ProcessEnv} env 环境变量
+ * @param {() => string} help 出错时附带的帮助文档
+ * @returns {{ enabled: false } | { enabled: true, repo: { owner: string, repo: string, full: string }, environment?: string, token: string, apiUrl: string }}
+ */
+export function resolveGithubTarget(options, env, help) {
+  const repoOption = options.get(OPTION_GITHUB_REPO)
+  const environment = options.get(OPTION_GITHUB_ENV)
+  const enabled =
+    options.get(OPTION_GITHUB) === true || repoOption !== undefined || environment !== undefined
+  if (!enabled) {
+    return { enabled: false }
+  }
+  if (options.has('--format')) {
+    throw new UsageError(
+      `${OPTION_GITHUB} 不能与 --format 一起使用：写入 GitHub 时 stdout 只输出变量名`,
+      help(),
+    )
+  }
+  if (options.has('--separator')) {
+    throw new UsageError(
+      `${OPTION_GITHUB} 不能与 --separator 一起使用：分隔符只用于 stdout`,
+      help(),
+    )
+  }
+  if (repoOption !== undefined && !/^[^\s/]+\/[^\s/]+$/.test(repoOption)) {
+    throw new UsageError(
+      `${OPTION_GITHUB_REPO} 需要 owner/repo 形式，实际: ${repoOption}`,
+      help(),
+    )
+  }
+  return {
+    enabled: true,
+    repo: resolveGithubRepo(repoOption, env),
+    environment,
+    token: resolveGithubToken(env),
+    apiUrl: resolveGithubApiUrl(env),
+  }
+}
+
+/** 两个命令共用的写入结果（stdout 只出现仓库 / 范围 / 变量名，绝不出现值） */
+export function renderGithubResult(repo, environment, written) {
+  const scope = environment === undefined ? '仓库' : `Environment（${environment}）`
+  return [
+    `GitHub 仓库: ${repo}`,
+    `密钥范围: ${scope}`,
+    `已写入 ${written.length} 个密钥:`,
+    ...written.map((name) => `- ${name}`),
+  ].join('\n')
 }
 
 /** 组装仓库密钥 / 环境密钥的 REST 路径 */

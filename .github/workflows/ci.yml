@@ -437,6 +437,58 @@ jobs:
               exit 1
             fi
 
+            # keystore-env --github：与 signing-env 共用 API 桩，验证 4 个变量写入
+            MOCK_GITHUB_LOG="$tmp/keystore-github.jsonl" \
+              node tests/mock-github-server.mjs > "$tmp/keystore-github-port.txt" &
+            keystore_github_pid=$!
+            for _ in 1 2 3 4 5 6 7 8 9 10; do
+              test -s "$tmp/keystore-github-port.txt" && break
+              sleep 0.1
+            done
+            if [ ! -s "$tmp/keystore-github-port.txt" ]; then
+              echo 'mock GitHub server 未启动（keystore-env）' >&2
+              exit 1
+            fi
+            if ! ANDROID_KEYSTORE_PASSWORD=changeit \
+              GITHUB_TOKEN=ks-token \
+              GITHUB_REPOSITORY=example/repo \
+              GITHUB_API_URL="http://127.0.0.1:$(cat "$tmp/keystore-github-port.txt")" \
+              node src/publish-apk.js keystore-env \
+              --file "$tmp/release.p12" --key-alias release --github \
+              > "$tmp/keystore-env-github.txt" 2> "$tmp/keystore-env-github.err"; then
+              kill "$keystore_github_pid" 2>/dev/null || true
+              cat "$tmp/keystore-env-github.err" >&2
+              exit 1
+            fi
+            kill "$keystore_github_pid" 2>/dev/null || true
+            wait "$keystore_github_pid" 2>/dev/null || true
+            test "$(grep -c '^- ANDROID_' "$tmp/keystore-env-github.txt")" -eq 4
+            test "$(grep -c '"method":"PUT"' "$tmp/keystore-github.jsonl")" -eq 4
+            grep -q '"authorization":"Bearer ks-token"' "$tmp/keystore-github.jsonl"
+            grep -q '/repos/example/repo/actions/secrets/ANDROID_KEYSTORE_BASE64' \
+              "$tmp/keystore-github.jsonl"
+            node -e '
+              const fs = require("node:fs");
+              const puts = fs.readFileSync(process.argv[1], "utf8").trim().split("\n")
+                .map(JSON.parse).filter((call) => call.method === "PUT");
+              if (puts.length !== 4) throw new Error("expected 4 PUTs");
+              const stdout = fs.readFileSync(process.argv[2], "utf8");
+              for (const put of puts) {
+                if (put.body.key_id !== "test-key") throw new Error("bad key_id");
+                if (stdout.includes(put.body.encrypted_value)) {
+                  throw new Error("encrypted_value leaked to stdout");
+                }
+                const keys = Object.keys(put.body).sort().join(",");
+                if (keys !== "encrypted_value,key_id") throw new Error("bad body keys");
+              }
+            ' "$tmp/keystore-github.jsonl" "$tmp/keystore-env-github.txt"
+            # --github 与 --format 互斥（本地参数校验，不发请求）
+            if GITHUB_TOKEN=ks-token node src/publish-apk.js keystore-env \
+              --file "$tmp/release.p12" --store-password changeit --github --format json > /dev/null 2>&1; then
+              echo 'keystore-env --github 与 --format 应当互斥' >&2
+              exit 1
+            fi
+
             keystore_b64="$(openssl base64 -A -in "$tmp/release.p12")"
             ANDROID_KEYSTORE_BASE64="$keystore_b64" ANDROID_KEYSTORE_PASSWORD=changeit \
               node src/publish-apk.js keystore --file "$tmp/from-base64.p12" > /dev/null

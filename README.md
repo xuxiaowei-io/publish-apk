@@ -64,6 +64,7 @@ publish-apk cert --file ./certpath.cer                    # 查看证书
 publish-apk cert --file ./storeFile.p12 --password <密码>  # 查看 PKCS#12 密钥库
 publish-apk keystore --file ./release.p12 --store-password <口令> --key-alias release  # 校验 Android 签名密钥库
 publish-apk keystore-env --file ./release.p12  # 导出 CI 变量（含明文口令）
+GITHUB_TOKEN=... publish-apk keystore-env --file ./release.p12 --github  # 一键写入 GitHub Actions 密钥
 publish-apk keystore-gen --file ./release.p12 --key-alias release  # 快速生成 Android keystore
 ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore  # 校验 CI 变量
 publish-apk profile --file ./profile.p7b                  # 查看 P7B Provisioning Profile
@@ -277,9 +278,36 @@ ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-env --file ./release.p12
   两者一起用适合生成 `.signing/android.env`，避免把整份 BASE64 再塞进本地环境。
 - `env` 格式的值用双引号包起来并转义特殊字符，适合逐项复制到 CI 变量；`shell` 格式适合本地
   `source`；`json` 格式适合脚本解析。
-- **警告：输出包含明文口令**，不要写入日志、提交仓库或公开分享；`stdout` 只有变量，
+- **警告：默认输出包含明文口令**，不要写入日志、提交仓库或公开分享；`stdout` 只有变量，
   `stderr` 只有警告与错误。
 - 依赖 JDK 的 `keytool`；可用 `KEYTOOL=/path/to/keytool` 指定。
+
+#### 一键写入 GitHub Actions 密钥（`--github`）
+
+`--github` 把导出的变量（默认 4 个，规则同 stdout）逐个通过 GitHub REST API 写入
+Actions 密钥；stdout 只列变量名，不输出任何值：
+
+```bash
+# 写入当前仓库（GITHUB_REPOSITORY 或 git remote origin 推断）
+GITHUB_TOKEN=<token> publish-apk keystore-env --file ./release.p12 --github
+
+# 指定仓库与 GitHub Environment
+GITHUB_TOKEN=<token> publish-apk keystore-env --file ./release.p12 \
+  --github --github-repo owner/repo --github-env production
+```
+
+- 与 `huawei signing-env --github` 共用同一套实现（[src/github.js](src/github.js)）：
+  值用 libsodium sealed box 加密后上传，请求体只有 `encrypted_value` 与 `key_id`。
+- `GITHUB_TOKEN` 需要仓库 Secrets 写权限：fine-grained 的 `Secrets: Read and write`，
+  classic 的 `repo`。Actions 内置的 `GITHUB_TOKEN` 通常不能写 Secrets，CI 里请用有权限的 PAT。
+- 省略 `--github-repo` 时先看 `GITHUB_REPOSITORY`，再按当前 git remote origin 推断；
+  GHES 用 `GITHUB_API_URL=https://host/api/v3`。
+- 写入的变量与 stdout 一致：默认 4 个；`--include-file` 加 `ANDROID_KEYSTORE_FILE`，
+  `--no-base64` 去掉 `ANDROID_KEYSTORE_BASE64`。`--include-file` 写的是本机绝对路径，
+  CI 里未必适用，一般不要与 `--github` 同用。
+- 48 KB 上限按加密后的 `encrypted_value` 计算；超过时本地失败，不发起请求。
+- `--github` 不能与 `--format` / `--separator` 同时使用；`--github-env` 要求环境已存在。
+- 中途失败会提示已成功写入的个数；重跑会覆盖同名密钥。
 
 ### keystore-gen（快速生成 Android 签名密钥库）
 
@@ -1317,7 +1345,7 @@ publish-apk huawei service-account-upload-url
 
 ### GitHub Actions 密钥（`GITHUB_*`）
 
-只用于 `huawei signing-env --github`；不会影响其它命令。
+只用于 `huawei signing-env --github` 与 `keystore-env --github`；不会影响其它命令。
 
 | 环境变量 | 等价选项 | 说明 |
 | --- | --- | --- |
@@ -1409,6 +1437,8 @@ make keystore ANDROID_KEYSTORE_FILE=./release.p12 ANDROID_KEY_ALIAS=release  # �
 ANDROID_KEYSTORE_BASE64="$(openssl base64 -A -in release.p12)" \
   ANDROID_KEYSTORE_PASSWORD=<口令> make keystore ANDROID_KEYSTORE_FILE=./release.p12
 make keystore-help                               # keystore 命令帮助
+ANDROID_KEYSTORE_PASSWORD=<口令> make keystore-env \
+  KEYSTORE_ENV_ARGS="--file ./release.p12 --github --github-repo owner/repo"  # 一键写入 GitHub 密钥
 make profile PROFILE_FILE=./profile.p7b          # 查看 P7B Provisioning Profile
 make profile-help                                # profile 命令帮助
 make hap HAP_FILE=./app-signed.hap               # 查看 HAP 安装包信息

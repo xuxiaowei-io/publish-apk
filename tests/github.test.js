@@ -12,8 +12,10 @@ import assert from 'node:assert/strict'
 
 import {
   GITHUB_SECRET_MAX_BYTES,
+  renderGithubResult,
   resolveGithubApiUrl,
   resolveGithubRepo,
+  resolveGithubTarget,
   resolveGithubToken,
   setGithubSecrets,
 } from '../src/github.js'
@@ -195,6 +197,98 @@ const BASE_OPTIONS = { repo: 'owner/repo', token: 'test-token', apiUrl: API_URL 
   assert.equal(
     resolveGithubApiUrl({ GITHUB_API_URL: 'https://ghe.example.com/api/v3/' }),
     'https://ghe.example.com/api/v3',
+  )
+}
+
+// 7) 两个命令共用的 --github 选项解析
+{
+  const noHelp = () => 'help'
+  assert.deepEqual(resolveGithubTarget(new Map(), {}, noHelp), { enabled: false })
+
+  const repo = resolveGithubTarget(
+    new Map([
+      ['--github', true],
+      ['--github-repo', 'owner/repo'],
+    ]),
+    { GITHUB_TOKEN: 'token' },
+    noHelp,
+  )
+  assert.equal(repo.enabled, true)
+  assert.equal(repo.repo.full, 'owner/repo')
+  assert.equal(repo.environment, undefined)
+  assert.equal(repo.token, 'token')
+  assert.equal(repo.apiUrl, 'https://api.github.com')
+
+  const environment = resolveGithubTarget(
+    new Map([
+      ['--github-repo', 'owner/repo'],
+      ['--github-env', 'production'],
+    ]),
+    { GITHUB_TOKEN: 'token', GITHUB_API_URL: 'https://ghe.example.com/api/v3/' },
+    noHelp,
+  )
+  assert.equal(environment.enabled, true)
+  assert.equal(environment.environment, 'production')
+  assert.equal(environment.apiUrl, 'https://ghe.example.com/api/v3')
+
+  assert.throws(
+    () =>
+      resolveGithubTarget(
+        new Map([
+          ['--github', true],
+          ['--github-repo', 'owner/repo'],
+          ['--format', 'json'],
+        ]),
+        { GITHUB_TOKEN: 'token' },
+        noHelp,
+      ),
+    /不能与 --format/,
+  )
+  assert.throws(
+    () =>
+      resolveGithubTarget(
+        new Map([
+          ['--github', true],
+          ['--github-repo', 'owner/repo'],
+          ['--separator', ':'],
+        ]),
+        { GITHUB_TOKEN: 'token' },
+        noHelp,
+      ),
+    /不能与 --separator/,
+  )
+  assert.throws(
+    () =>
+      resolveGithubTarget(
+        new Map([
+          ['--github', true],
+          ['--github-repo', 'badrepo'],
+        ]),
+        { GITHUB_TOKEN: 'token' },
+        noHelp,
+      ),
+    /owner\/repo/,
+  )
+  assert.throws(
+    () =>
+      resolveGithubTarget(
+        new Map([
+          ['--github', true],
+          ['--github-repo', 'owner/repo'],
+        ]),
+        {},
+        noHelp,
+      ),
+    /未设置 GITHUB_TOKEN/,
+  )
+
+  assert.equal(
+    renderGithubResult('owner/repo', undefined, ['A', 'B']),
+    'GitHub 仓库: owner/repo\n密钥范围: 仓库\n已写入 2 个密钥:\n- A\n- B',
+  )
+  assert.match(
+    renderGithubResult('owner/repo', 'production', ['A']),
+    /密钥范围: Environment（production）/,
   )
 }
 
