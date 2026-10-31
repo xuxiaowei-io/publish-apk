@@ -73,10 +73,56 @@ publish-apk apk --file ./app-arm64-v8a-release.apk        # 查看 APK 安装包
 publish-apk aab --file ./app-release.aab                  # 查看 AAB 安装包信息
 publish-apk apk --file ./*.apk                             # 一次查看多个 APK
 publish-apk aab --file ./*.aab                             # 一次查看多个 AAB
+```
+
+`huawei` 子命令（华为应用市场 / AppGallery Connect）：
+
+```bash
 publish-apk huawei                # huawei 子命令帮助
 publish-apk huawei <命令> --help   # 某个子命令的帮助文档
+publish-apk huawei service-account --kid <密钥ID> --iss <签发者> \
+  --private-key ./private.pem                              # 签发 Service Account JWT
+publish-apk huawei service-account-upload-url --app-id <应用ID> \
+  --file ./a1.apk --token <Token>                          # 获取文件上传地址
+publish-apk huawei service-account-upload-file --app-id <应用ID> \
+  --file ./a1.apk --token <Token>                          # 上传到对象存储（objectId）
+publish-apk huawei service-account-upload-file-package-info-update --app-id <应用ID> \
+  --file ./a1.apk --token <Token>                          # 上传并登记软件包
+publish-apk huawei client-credentials --client-id <客户端ID> \
+  --client-secret <客户端密钥>                              # 换取 access_token
+publish-apk huawei client-credentials-upload-url --app-id <应用ID> \
+  --file ./a1.apk --client-id <客户端ID> --token <access_token>  # 获取文件上传地址
+publish-apk huawei client-credentials-upload-file --app-id <应用ID> \
+  --file ./a1.apk --client-id <客户端ID> --token <access_token>  # 上传到对象存储（objectId）
+publish-apk huawei client-credentials-upload-file-package-info-update --app-id <应用ID> \
+  --file ./a1.apk --client-id <客户端ID> --token <access_token>  # 上传并登记软件包
+publish-apk huawei signing-config --store-file ./storeFile.p12 \
+  --certpath ./certpath.cer --profile ./profile.p7b        # 生成鸿蒙签名配置
+publish-apk huawei signing-passwords --config ./build-profile.json5  # 只补 material 两串口令
+publish-apk huawei signing-material --config ./build-profile.json5 \
+  --set storeFile=./storeFile.p12                          # 替换 material 字段
+HARMONY_STORE_FILE_BASE64=... HARMONY_CERTPATH_BASE64=... \
+  HARMONY_PROFILE_BASE64=... publish-apk huawei signing-material-env  # 用 HARMONY_* 校验并替换 material
+publish-apk huawei signing-env --config ./build-profile.json5 --product prod  # 导出鸿蒙签名 CI 变量
+```
+
+`google` 子命令（Google Play）：
+
+```bash
 publish-apk google                # google 子命令帮助
 publish-apk google <命令> --help   # 某个子命令的帮助文档
+publish-apk google access-token --service-account ./google-play-service-account.json  # 换取 access_token
+publish-apk google upload-aab --package-name com.example.app \
+  --file ./app-release.aab --service-account ./google-play-service-account.json  # 上传 .aab（stdout 是 versionCode）
+publish-apk google upload-aab --package-name com.example.app \
+  --file ./app-release.aab --service-account ./google-play-service-account.json \
+  --track internal                                        # 上传并发布到内部测试轨道
+publish-apk google upload-aab --package-name com.example.app \
+  --file ./app-release.aab --token <access_token> --track production \
+  --release-status inProgress --user-fraction 0.1         # 10% 分阶段发布
+publish-apk google upload-aab --package-name com.example.app \
+  --file ./app-release.aab --client-email <服务账号邮箱> \
+  --private-key ./service-account.pem --track production   # 分项凭据（CI 分层存 Secret）
 ```
 
 ### 为什么会有查看证书 / profile / keystore / HAP / APP / APK / AAB 的命令？
@@ -402,11 +448,211 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 | `huawei signing-material-env` | 用 `HARMONY_*` 环境变量先校验再替换 material | 替换结果 |
 | `huawei signing-env` | 按产品导出鸿蒙签名 CI 变量（BASE64 / 口令） | 七个 `HARMONY_*` 变量 |
 
+#### 上传与鉴权类命令的共用选项
+
+两套鉴权各有 4 个命令，选项一一对应：`service-account*` 用 `--kid` / `--iss` / 私钥，`client-credentials*` 用
+`--client-id` / `--client-secret`；其余同名选项含义完全相同。下表只列这两族共用的业务选项，每个子命令另有
+一段「必填 / 凭据 / stdout / 示例」。
+
+| 选项 | 环境变量 | 适用命令 | 说明 |
+| --- | --- | --- | --- |
+| `--app-id <应用ID>` | `HUAWEI_APP_ID` | `*-upload-*` | AppGallery Connect 的 `appId`（非负整数），**必填** |
+| `--file <路径>` | `HUAWEI_FILE` | `*-upload-*` | `*-upload-url` 用它补 `--file-name` / `--content-length`；`*-upload-file*` 要求它指向待上传的普通文件 |
+| `--file-name <文件名>` | `HUAWEI_FILE_NAME` | `*-upload-*` | 上传后的对象名（含后缀）；不给时取 `--file` 的 basename，后缀决定走哪套登记接口 |
+| `--content-length <字节>` | `HUAWEI_CONTENT_LENGTH` | 仅 `*-upload-url` | 文件大小；不给时取 `--file` 的字节数；`*-upload-file*` 不接受该选项 |
+| `--object-id <对象ID>` | `HUAWEI_OBJECT_ID` | 仅 `*-upload-file-package-info-update` | 已上传文件的 `objectId`；给了就跳过取址与上传，只做登记 |
+| `--release-type <取值>` | `HUAWEI_RELEASE_TYPE` | 仅 `*-upload-file-package-info-update` | 发布方式，默认 `1`：`.app` 取 `1` 全网 / `7` 企业非公开，`.apk` 等取 `1` 全网 / `3` 分阶段 |
+| `--release-phase <取值>` | `HUAWEI_RELEASE_PHASE` | 仅 `*-upload-file-package-info-update` | `0` 全网 / `3` 分阶段，默认 `0`；只有 `.app`（v3 接口）接受 |
+| `--token <Token>` | `HUAWEI_TOKEN` | `*-upload-*` | 已签发的 JWT 或 `access_token`；本地签发 / 换取未触发时才用它（取舍顺序见各系列的「凭据」行） |
+| `--verbose` | `HUAWEI_VERBOSE` | 全部 | 运行日志写 `stderr`；Token / `client_id` / 私钥路径只显示掩码 |
+| `-h` / `--help` | — | 全部 | 该子命令的帮助（写 `stdout`） |
+
+`HUAWEI_API_BASE` 只走环境变量，用于覆盖接口域名（默认 `https://connect-api.cloud.huawei.com`）。
+
+### huawei service-account 系列（签发 JWT 与上传）
+
+这四个命令是同一条流水线的四个档位：只签 Token → 只取上传地址 → 上传到对象存储 → 上传并登记软件包。
+
+凭据选项（4 个命令通用，`--iat` 只作用于本地签发的 JWT）：
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--kid <密钥ID>` | 需要本地签发时必填 | `HUAWEI_KID` | JWT 请求头 `kid` |
+| `--iss <签发者>` | 需要本地签发时必填 | `HUAWEI_ISS` | JWT 载荷 `iss` |
+| `--private-key <文件>` | 与下一项二选一 | `HUAWEI_PRIVATE_KEY` | 私钥 PEM 文件路径 |
+| `--private-key-data <PEM>` | 与上一项二选一 | `HUAWEI_PRIVATE_KEY_DATA` | 私钥 PEM 文本；环境变量层两者都在时**数据优先**并在 `stderr` 提示 |
+| `--iat <秒>` | 否 | `HUAWEI_IAT` | JWT 签发时间（UTC 秒级时间戳）；默认当前时间，`exp` 恒为 `iat + 3600` |
+
+#### huawei service-account
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--kid`、`--iss` 与私钥（`--private-key` 或 `--private-key-data`） |
+| 作用 | 只在本地签发 PS256 JWT，不访问任何接口 |
+| stdout | JWT 字符串，可直接作为 `Authorization: Bearer` 使用 |
+| 可选 | `--iat`、`--verbose` |
+
+```bash
+publish-apk huawei service-account --kid <密钥ID> --iss <签发者> --private-key ./private.pem
+
+HUAWEI_KID=<密钥ID> HUAWEI_ISS=<签发者> \
+  HUAWEI_PRIVATE_KEY_DATA="$(cat private.pem)" publish-apk huawei service-account
+```
+
+#### huawei service-account-upload-url
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--app-id`；`--file`（或把 `--file-name` 与 `--content-length` 都显式给出） |
+| 凭据 | 按序取：命令行 Service Account 凭据（本地签发）→ `--token` → `HUAWEI_*` 环境变量凭据 |
+| stdout | 取址接口的原始响应 JSON（`urlInfo.url` / `method` / `headers` / `objectId`） |
+| 说明 | 只取地址、不上传；上传要按 `urlInfo.method` 与 `urlInfo.headers` 自己发（见「上传一个安装包分三步」） |
+
+```bash
+RESP=$(publish-apk huawei service-account-upload-url \
+  --app-id <应用ID> --file ./a1.apk \
+  --kid <密钥ID> --iss <签发者> --private-key ./private.pem)
+```
+
+#### huawei service-account-upload-file
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--app-id`、`--file`（待上传的普通文件；文件名与大小都取自它） |
+| 凭据 | 命令行 Service Account 凭据（本地签发）→ `--token` → `HUAWEI_*` 环境变量凭据 |
+| stdout | `objectId` |
+| 不接受 | `--content-length`（大小恒取本地实际字节数，否则 OBS 签名校验失败） |
+| 说明 | 只上传到对象存储，后台「软件包管理」看不到；要登记请用下一个命令 |
+
+```bash
+OBJECT_ID=$(publish-apk huawei service-account-upload-file \
+  --app-id <应用ID> --file ./a1.apk \
+  --kid <密钥ID> --iss <签发者> --private-key ./private.pem)
+```
+
+#### huawei service-account-upload-file-package-info-update
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--app-id`；未给 `--object-id` 时还要 `--file`；`--file-name`（不给时取 `--file` 的 basename） |
+| 凭据 | 命令行 Service Account 凭据（本地签发）→ `--token` → `HUAWEI_*` 环境变量凭据；登记接口也带同一个 Token |
+| stdout | `objectId`（复用 `--object-id` 时原样回显） |
+| 软件包标识 | 登记返回的 `.app` → `packageId`、`.apk` 等 → `pkgVersion`，只在 `--verbose` 日志里 |
+| 后缀 | `.app` 走 `PUT /api/publish/v3/app-package-info`（`--release-type` 取 `1` / `7`，并支持 `--release-phase`）；`.apk` / `.aab` / `.rpk` / `.hap` 走 `PUT /api/publish/v2/app-file-info`（`--release-type` 取 `1` / `3`）；认不出的后缀在本地报错 |
+
+```bash
+# 三步都走：取址 → 上传 → 登记
+publish-apk huawei service-account-upload-file-package-info-update \
+  --app-id <应用ID> --file ./a1.apk --release-type 1 \
+  --kid <密钥ID> --iss <签发者> --private-key ./private.pem
+
+# 文件已在别处上传：只登记
+publish-apk huawei service-account-upload-file-package-info-update \
+  --app-id <应用ID> --file-name a1.apk --object-id "$OBJECT_ID" --token <Token>
+```
+
+### huawei client-credentials 系列（换取 access_token 与上传）
+
+与 Service Account 系列一一对应：多一步用 `client_id` + `client_secret` 换 `access_token`，业务接口除
+`Authorization: Bearer` 外还要带 `client_id` 头。
+
+凭据选项（4 个命令通用）：
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--client-id <客户端ID>` | 需要本地换取时必填 | `HUAWEI_CLIENT_ID` | API 客户端 ID；业务接口也用它作 `client_id` 头 |
+| `--client-secret <密钥>` | 需要本地换取时必填 | `HUAWEI_CLIENT_SECRET` | API 客户端密钥；只用来换 `access_token`，不发往业务接口 |
+
+#### huawei client-credentials
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--client-id`、`--client-secret` |
+| stdout | `access_token`（`token_type` / `expires_in` 见 `--verbose` 日志） |
+| 请求 | `POST /api/oauth2/v1/token`，JSON 体 `grant_type=client_credentials` + `client_id` + `client_secret` |
+
+```bash
+publish-apk huawei client-credentials --client-id <客户端ID> --client-secret <客户端密钥>
+HUAWEI_CLIENT_ID=<客户端ID> HUAWEI_CLIENT_SECRET=<客户端密钥> publish-apk huawei client-credentials
+```
+
+#### huawei client-credentials-upload-url
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--app-id`；`--file`（或把 `--file-name` 与 `--content-length` 都显式给出） |
+| 凭据 | 按序取：命令行 `--client-id` + `--client-secret`（本地换取）→ `--token` → `HUAWEI_*` 环境变量凭据 |
+| stdout | 取址接口的原始响应 JSON |
+| 说明 | 用 `--token` 时，只要给得出 `--client-id`（或 `HUAWEI_CLIENT_ID`），仍会带上 `client_id` 头 |
+
+```bash
+RESP=$(publish-apk huawei client-credentials-upload-url \
+  --app-id <应用ID> --file ./a1.apk \
+  --client-id <客户端ID> --client-secret <客户端密钥>)
+```
+
+#### huawei client-credentials-upload-file
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--app-id`、`--file` |
+| 凭据 | 命令行 `--client-id` + `--client-secret`（本地换取）→ `--token` → `HUAWEI_*` 环境变量凭据 |
+| stdout | `objectId` |
+| 不接受 | `--content-length`（大小恒取本地实际字节数） |
+
+```bash
+OBJECT_ID=$(publish-apk huawei client-credentials-upload-file \
+  --app-id <应用ID> --file ./a1.apk \
+  --client-id <客户端ID> --client-secret <客户端密钥>)
+```
+
+#### huawei client-credentials-upload-file-package-info-update
+
+| 项 | 说明 |
+| --- | --- |
+| 必填 | `--app-id`；未给 `--object-id` 时还要 `--file`；`--file-name`（不给时取 `--file` 的 basename） |
+| 凭据 | 命令行 `--client-id` + `--client-secret`（本地换取）→ `--token` → `HUAWEI_*` 环境变量凭据；登记接口也带 `client_id` 头 |
+| stdout | `objectId`（软件包标识见 `--verbose` 日志） |
+| 后缀 | 与 Service Account 那套完全一致：`.app` 走 v3、`.apk` 等走 v2，按 `--file-name` 后缀自动选 |
+
+```bash
+publish-apk huawei client-credentials-upload-file-package-info-update \
+  --app-id <应用ID> --file ./a1.app --release-type 7 --release-phase 3 \
+  --client-id <客户端ID> --client-secret <客户端密钥>
+
+# 文件已在别处上传：只登记
+publish-apk huawei client-credentials-upload-file-package-info-update \
+  --app-id <应用ID> --file-name a1.apk --object-id "$OBJECT_ID" \
+  --token <access_token> --client-id <客户端ID>
+```
+
 ### 生成鸿蒙签名配置（`huawei signing-config`）
 
 鸿蒙 `build-profile.json5` 的 `app.signingConfigs[].material` 里，`storePassword` / `keyPassword`
 不是明文，而是用 `.p12` 同级目录下 `material/` 里的 workKey 加密过的十六进制串。
-本命令把「选文件 + 输明文口令 + 生成 material + 加密口令」合成一步：
+本命令把「选文件 + 输明文口令 + 生成 material + 加密口令」合成一步。
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--store-file <文件/BASE64>` | 是 | `HARMONY_STORE_FILE` / `HARMONY_STORE_FILE_BASE64` | `.p12` 路径，或直接给 BASE64 |
+| `--store-file-out <文件>` | 否 | `HARMONY_STORE_FILE_OUT` | `.p12` 内容 / 复制目标；默认当前目录的 `storeFile.p12` |
+| `--certpath <文件/PEM/BASE64>` | 是 | `HARMONY_CERTPATH`（别名 `HARMONY_CERT` / `HARMONY_CERTPATH_BASE64` / `HARMONY_CERT_BASE64`） | `.cer` 路径、PEM 内容或 BASE64（DER / PEM） |
+| `--certpath-out <文件>` | 否 | `HARMONY_CERTPATH_OUT` | 证书内容 / 复制目标；默认 `.p12` 同级的 `certpath.cer` |
+| `--profile <文件/BASE64>` | 是 | `HARMONY_PROFILE` / `HARMONY_PROFILE_BASE64` | `.p7b` 路径，或直接给 BASE64 |
+| `--profile-out <文件>` | 否 | `HARMONY_PROFILE_OUT` | profile 内容 / 复制目标；默认 `.p12` 同级的 `profile.p7b` |
+| `--key-alias <别名>` | 否 | `HARMONY_KEY_ALIAS` | `.p12` 里的密钥别名；不传时用 keytool 读取 |
+| `--sign-alg <算法>` | 否 | `HARMONY_SIGN_ALG` | 签名算法，默认 `SHA256withECDSA` |
+| `--store-password <明文>` | 否 | `HARMONY_STORE_PASSWORD` | `.p12` 明文口令；不给时交互输入，给了会进 `ps` / shell 历史 |
+| `--key-password <明文>` | 否 | `HARMONY_KEY_PASSWORD` | 密钥明文口令；默认与 `--store-password` 相同 |
+| `--store-password-file <文件>` | 否 | — | 从文件第一行读 `.p12` 口令，`-` 表示 stdin |
+| `--key-password-file <文件>` | 否 | — | 从文件第一行读密钥口令，`-` 表示 stdin |
+| `--config <文件>` | 否 | `HARMONY_CONFIG` | `build-profile.json5` 路径，默认 `./build-profile.json5`；`--write` / `--product` 时需要 |
+| `--name <名字>` | 否 | `HARMONY_SIGNING_NAME` | 要更新 / 输出的 `signingConfig`，默认 `default` |
+| `--product <产品>` | 否 | `HARMONY_PRODUCT` | 按 `products[].name` 找它挂的 `signingConfig` |
+| `--write` | 否 | — | 写回 `build-profile.json5`（只更新同名 `signingConfig`，改前备份） |
+| `--new-material` | 否 | — | material 已存在也重造一套（旧的挪成 `material.bak-<时间戳>`） |
+| `--no-keytool` | 否 | — | 跳过 keytool 别名发现与口令自检 |
+| `--verbose` | 否 | `HARMONY_VERBOSE` | 输出 `.p12` / `.cer` / `.p7b` 的全部字段（`stderr`） |
 
 ```bash
 HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-config \
@@ -464,7 +710,21 @@ HARMONY_PROFILE_BASE64="$(openssl base64 -A -in profile.p7b)" \
 ### 只补充 build-profile.json5 的口令（`huawei signing-passwords`）
 
 已有 `build-profile.json5` 里 `material.storeFile` / `keyAlias` / `certpath` / `profile` 都齐了，
-只缺 `keyPassword` / `storePassword`（例如刚 clone 下来、口令字段为空）时，用这个命令：
+只缺 `keyPassword` / `storePassword`（例如刚 clone 下来、口令字段为空）时，用这个命令。
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--config <文件>` | 否 | `HARMONY_CONFIG` | `build-profile.json5` 路径，默认 `./build-profile.json5` |
+| `--name <名字>` | 否 | `HARMONY_SIGNING_NAME` | 要补充的 `signingConfig`，默认 `default` |
+| `--product <产品>` | 否 | `HARMONY_PRODUCT` | 按 `products[].name` 找它挂的 `signingConfig` |
+| `--store-password <明文>` | 否 | `HARMONY_STORE_PASSWORD` | `.p12` 明文口令；不推荐走命令行 |
+| `--key-password <明文>` | 否 | `HARMONY_KEY_PASSWORD` | 密钥明文口令；默认与 `--store-password` 相同 |
+| `--store-password-file <文件>` | 否 | — | 从文件第一行读 `.p12` 口令，`-` 表示 stdin |
+| `--key-password-file <文件>` | 否 | — | 从文件第一行读密钥口令，`-` 表示 stdin |
+| `--new-material` | 否 | — | material 已存在也重造一套（旧的挪成 `material.bak-<时间戳>`） |
+| `--no-keytool` | 否 | — | 跳过 keytool 别名发现与口令自检 |
+
+口令必填，四选一：环境变量、命令行选项、口令文件、交互输入（非交互环境都没有时直接报错）。
 
 ```bash
 HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-passwords \
@@ -481,10 +741,43 @@ HARMONY_STORE_PASSWORD=<p12口令> publish-apk huawei signing-passwords \
 - 写回前备份到 `build-profile.json5` 同级的 `.signing/backup/`；回读校验两个字段。
 - 默认用 `keytool` 校验口令 / 别名；没有 JDK 或不想自检时加 `--no-keytool`。
 
+### 手工替换 material 字段（`huawei signing-material`）
+
+只想改签名配置里的路径 / 别名（不重新生成 material、不动口令）时用这个命令；口令请用
+`huawei signing-passwords`。
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--config <文件>` | 否 | `HARMONY_CONFIG` | `build-profile.json5` 路径，默认 `./build-profile.json5` |
+| `--name <名字>` | 否 | `HARMONY_SIGNING_NAME` | 要修改的 `signingConfig`，默认 `default` |
+| `--product <产品>` | 否 | `HARMONY_PRODUCT` | 按 `products[].name` 找它挂的 `signingConfig` |
+| `--set <字段=值>` | 是（可重复） | — | 要替换的 `material` 字段，可改 `storeFile` / `certpath` / `profile` / `keyAlias` / `signAlg` |
+
+```bash
+publish-apk huawei signing-material --config ./build-profile.json5 --name default \
+  --set storeFile=./storeFile.p12 --set keyAlias=release
+```
+
+- `stdout` 输出替换结果（配置 / `signingConfig` / 替换的字段 / 备份），`stderr` 只有进度与警告。
+- 只改指定字段，其它字段、顺序与注释保持不变；写回前备份到 `.signing/backup/`，写后回读校验。
+- `keyPassword` / `storePassword` 不接受 `--set`：它们是密文，必须用 `huawei signing-passwords` 或
+  `huawei signing-material-env` 加密后写入。
+
 ### 用环境变量替换 material（`huawei signing-material-env`）
 
 CI 里通常把签名材料放在环境变量中；这个命令先校验，再把通过校验的内容替换到
-`build-profile.json5` 的 `material`：
+`build-profile.json5` 的 `material`。
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--config <文件>` | 否 | `HARMONY_CONFIG` | `build-profile.json5` 路径，默认 `./build-profile.json5` |
+| `--name <名字>` | 否 | `HARMONY_SIGNING_NAME` | 要修改的 `signingConfig`，默认 `default` |
+| `--product <产品>` | 否 | `HARMONY_PRODUCT` | 按 `products[].name` 找它挂的 `signingConfig` |
+| `--no-keytool` | 否 | — | 跳过 keytool 口令自检（仍会校验证书 / Profile / p12 内容） |
+| `--new-material` | 否 | — | material 已存在也重造一套（旧的挪成 `material.bak-<时间戳>`） |
+| `--require-all` | 否 | — | 要求 store / cert / profile / 口令齐全，缺一项直接失败（CI 用） |
+
+签名材料本身来自下列 `HARMONY_*` 环境变量，命令行没有对应选项：
 
 ```bash
 HARMONY_STORE_FILE_BASE64=... \
@@ -516,7 +809,15 @@ publish-apk huawei signing-material-env \
 ### 按产品导出鸿蒙签名 CI 变量（`huawei signing-env`）
 
 从 `build-profile.json5` 的 `products[].name` 找到对应 `signingConfig`，读取 material、p12、
-证书、Profile 与密文口令，导出 CI 需要的七个变量：
+证书、Profile 与密文口令，导出 CI 需要的七个变量。
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--config <文件>` | 否 | `HARMONY_CONFIG` | `build-profile.json5` 路径，默认 `./build-profile.json5` |
+| `--product <产品>` | 否 | `HARMONY_PRODUCT` | 按产品名找它挂的 `signingConfig` |
+| `--name <名字>` | 否 | `HARMONY_SIGNING_NAME` | 不按产品时直接指定 `signingConfig`，默认 `default` |
+| `--format <env/shell/json>` | 否 | — | 输出格式，默认 `env`；`shell` 用单引号安全转义，`json` 便于脚本解析 |
+| `--separator <字符>` | 否 | — | `env` 格式的分隔符，默认 `=`；只支持 `=` 与 `:`，且不能用于其它格式 |
 
 ```bash
 publish-apk huawei signing-env --config ./build-profile.json5 --product prod
@@ -697,6 +998,47 @@ Google Play 走 **Android Publisher API v3**，鉴权用**服务账号 JSON 密�
 | --- | --- | --- |
 | `google access-token` | 用服务账号 JSON 换取 `access_token` | `access_token` |
 | `google upload-aab` | 创建 edit → 上传 `.aab` →（可选）更新轨道 → 提交 edit | bundle 的 `versionCode` |
+
+#### google access-token
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--service-account <文件>` | 与下一项二选一（或用分项） | `GOOGLE_SERVICE_ACCOUNT` | 服务账号 JSON 密钥文件路径 |
+| `--service-account-data <JSON>` | 与上一项二选一 | `GOOGLE_SERVICE_ACCOUNT_DATA` | 直接给 JSON 文本（与文件互斥） |
+| `--client-email <邮箱>` | 用分项时必填 | `GOOGLE_CLIENT_EMAIL` | JSON 的 `client_email` |
+| `--private-key <文件>` | 分项二选一 | `GOOGLE_PRIVATE_KEY` | 私钥 PEM 文件 |
+| `--private-key-data <PEM>` | 分项二选一 | `GOOGLE_PRIVATE_KEY_DATA` | 私钥 PEM 文本（建议只走环境变量） |
+| `--token-uri <地址>` | 否 | `GOOGLE_TOKEN_URI` | 默认取 JSON 的 `token_uri`，再退回 `https://oauth2.googleapis.com/token` |
+| `--verbose` | 否 | `GOOGLE_VERBOSE` | 运行日志写 `stderr`；`client_email` 只显示掩码 |
+
+- `stdout` 只有 `access_token`（有效期约 1 小时），本命令只换令牌、不碰应用。
+- 完整 JSON 与分项不能同时给；`--service-account` 与 `--service-account-data` 也互斥。
+- 凭据优先级：命令行 JSON → 命令行分项 → 环境变量 JSON → 环境变量分项。
+
+#### google upload-aab
+
+| 选项 | 必填 | 环境变量 | 说明 |
+| --- | --- | --- | --- |
+| `--package-name <包名>` | 是 | `GOOGLE_PACKAGE_NAME` | 如 `com.example.app` |
+| `--file <路径>` | 是 | `GOOGLE_FILE` | `.aab` 文件；后缀、包名、发布状态、比例都在本地先校验 |
+| `--service-account <文件>` | 未给 `--token` 时 | `GOOGLE_SERVICE_ACCOUNT` | 服务账号 JSON 密钥文件路径 |
+| `--service-account-data <JSON>` | 未给 `--token` 时（与上一项二选一） | `GOOGLE_SERVICE_ACCOUNT_DATA` | 直接给 JSON 文本 |
+| `--client-email <邮箱>` | 用分项时必填 | `GOOGLE_CLIENT_EMAIL` | JSON 的 `client_email` |
+| `--private-key <文件>` | 分项二选一 | `GOOGLE_PRIVATE_KEY` | 私钥 PEM 文件 |
+| `--private-key-data <PEM>` | 分项二选一 | `GOOGLE_PRIVATE_KEY_DATA` | 私钥 PEM 文本 |
+| `--token-uri <地址>` | 否 | `GOOGLE_TOKEN_URI` | 令牌接口地址 |
+| `--token <access_token>` | 否 | `GOOGLE_TOKEN` | 已换取的令牌；给了就不再用凭据换取 |
+| `--track <轨道>` | 否 | `GOOGLE_TRACK` | 轨道标识；不给则只上传 bundle、不进入任何轨道 |
+| `--release-status <状态>` | 否 | `GOOGLE_RELEASE_STATUS` | `completed`（默认）/ `draft` / `inProgress` / `halted` |
+| `--release-name <名称>` | 否 | `GOOGLE_RELEASE_NAME` | 轨道发布名称 |
+| `--release-notes <文本>` | 否 | `GOOGLE_RELEASE_NOTES` | 发布说明；较长时用 `"$(cat notes.txt)"` |
+| `--release-notes-language <语言>` | 否 | `GOOGLE_RELEASE_NOTES_LANGUAGE` | BCP-47，默认 `zh-CN` |
+| `--user-fraction <比例>` | 否 | `GOOGLE_USER_FRACTION` | 分阶段比例（0 与 1 之间）；`inProgress` 时必填 |
+| `--changes-not-sent-for-review` | 否 | `GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW` | 提交时置 `changesNotSentForReview=true`，变更留待人工送审 |
+| `--verbose` | 否 | `GOOGLE_VERBOSE` | 运行日志写 `stderr`；Token 只显示掩码 |
+
+- `stdout` 是 bundle 的 `versionCode`；只有 commit 成功修改才生效，失败时会尽力删除未提交的 edit。
+- 凭据优先级：命令行 JSON → 命令行分项 → `--token` → 环境变量 JSON → 环境变量分项。
 
 ### 上传一个 .aab 分四步
 
