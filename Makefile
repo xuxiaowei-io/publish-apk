@@ -114,18 +114,22 @@ SHELL := /usr/bin/env bash
 #      这类不需要转发的变量照样生效（--verbose 是开关，转成 `--verbose "0"` 反而无法表达「关闭」）。
 # 业务目标已用 @ 关闭命令回显，避免密钥打到日志里。
 #
-# Android keystore 校验可选变量（命令与 CI 读同名 ANDROID_* 环境变量）：
+# Android keystore 可选变量（命令与 CI 读同名 ANDROID_* 环境变量）：
 #   ANDROID_KEYSTORE_BASE64   密钥库的 BASE64 内容，等价于 --base64
 #   ANDROID_KEYSTORE_FILE     密钥库路径，等价于 --file（ANDROID_KEYSTORE 也可）
 #   ANDROID_KEY_ALIAS         私钥别名，等价于 --key-alias
 #   ANDROID_KEYSTORE_PASSWORD / ANDROID_KEY_PASSWORD
 #                             明文口令；只走环境变量或交互输入，**不作选项转发**（密码不进命令行）
+#   ANDROID_STORE_FILE        写进 keystore.properties 的 storeFile，等价于 keystore-config 的 --store-file
+#   ANDROID_KEYSTORE_CONFIG   keystore.properties 的输出路径，等价于 keystore-config 的 --out
 #   ANDROID_KEYSTORE_ARGS     追加到 keystore 命令末尾的额外参数
 #   KEYSTORE_ENV_ARGS         追加到 keystore-env 命令末尾的额外参数（如 --file ./release.p12 --format shell --include-file --no-base64，或 --github --github-repo owner/repo）
+#   KEYSTORE_CONFIG_ARGS      追加到 keystore-config 命令末尾的额外参数（如 --out ./keystore.properties --force）
 #   KEYSTORE_GEN_ARGS         追加到 keystore-gen 命令末尾的额外参数（如 --file ./release.p12 --key-alias release）
 #
 #   与 --base64 / ANDROID_KEYSTORE_BASE64 同用时，ANDROID_KEYSTORE_FILE 是**输出**路径：
 #   校验通过后把解码出来的密钥库原文写进去；只给 BASE64 时用临时文件校验，不落盘。
+#   keystore-config 也会把 BASE64 解码写到 ANDROID_STORE_FILE（未设置时用 ANDROID_KEYSTORE_FILE）。
 HUAWEI_KID ?=
 HUAWEI_ISS ?=
 HUAWEI_PRIVATE_KEY ?=
@@ -184,8 +188,11 @@ ANDROID_KEYSTORE_FILE ?=
 ANDROID_KEY_ALIAS ?=
 ANDROID_KEYSTORE_PASSWORD ?=
 ANDROID_KEY_PASSWORD ?=
+ANDROID_STORE_FILE ?=
+ANDROID_KEYSTORE_CONFIG ?=
 KEYSTORE_ARGS ?=
 KEYSTORE_ENV_ARGS ?=
+KEYSTORE_CONFIG_ARGS ?=
 KEYSTORE_GEN_ARGS ?=
 HARMONY_STORE_FILE ?=
 HARMONY_STORE_FILE_OUT ?=
@@ -253,6 +260,7 @@ AAB_FILE_ARGS = $(call aabOption,AAB_FILE,--file)
 # keystore 变量使用同一套转发规则；BASE64 与两个口令不转发（由命令读环境变量）
 keystoreOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 KEYSTORE_FILE_ARGS = $(call keystoreOption,ANDROID_KEYSTORE_FILE,--file) $(call keystoreOption,ANDROID_KEY_ALIAS,--key-alias)
+KEYSTORE_CONFIG_OPTIONS = $(call keystoreOption,ANDROID_STORE_FILE,--store-file) $(call keystoreOption,ANDROID_KEYSTORE_FILE,--store-file) $(call keystoreOption,ANDROID_KEY_ALIAS,--key-alias) $(call keystoreOption,ANDROID_KEYSTORE_CONFIG,--out)
 
 # 组合 huawei service-account 的参数：命令行给哪个变量就转哪个选项，都不给则完全回退环境变量
 # （HUAWEI_KID / HUAWEI_ISS / HUAWEI_PRIVATE_KEY / HUAWEI_PRIVATE_KEY_DATA / HUAWEI_IAT）
@@ -305,6 +313,9 @@ help: ## Show help information
 .PHONY: help h \
 	cert-help cert \
 	keystore-help keystore \
+	keystore-env-help keystore-env \
+	keystore-config-help keystore-config \
+	keystore-gen-help keystore-gen \
 	profile-help profile \
 	huawei-help \
 	huawei-signing-config-help huawei-signing-config \
@@ -379,6 +390,12 @@ keystore-env-help: ## 导出 Android keystore CI 变量帮助文档
 
 keystore-env: ## 导出 Android keystore 的 CI 变量（口令用 ANDROID_KEYSTORE_PASSWORD；KEYSTORE_ENV_ARGS 传 --file / --format / --github --github-repo owner/repo）
 	@node src/publish-apk.js keystore-env $(KEYSTORE_ENV_ARGS)
+
+keystore-config-help: ## 由变量生成 Android 签名配置文件帮助文档
+	node src/publish-apk.js keystore-config --help
+
+keystore-config: ## 由 ANDROID_* 变量生成 keystore.properties（BASE64 先落盘到 ANDROID_STORE_FILE；配置路径用 ANDROID_KEYSTORE_CONFIG；KEYSTORE_CONFIG_ARGS 追加 --force 等）
+	@node src/publish-apk.js keystore-config $(KEYSTORE_CONFIG_OPTIONS) $(KEYSTORE_CONFIG_ARGS)
 
 keystore-gen-help: ## 快速生成 Android 签名密钥库帮助文档
 	node src/publish-apk.js keystore-gen --help

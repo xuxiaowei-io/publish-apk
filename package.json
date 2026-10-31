@@ -40,6 +40,6 @@
   },
   "scripts": {
     "help": "node src/publish-apk.js",
-    "test": "node tests/sealed-box.test.js && node tests/github.test.js"
+    "test": "node tests/sealed-box.test.js && node tests/github.test.js && node tests/keystore-config.test.js"
   }
 }

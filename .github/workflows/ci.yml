@@ -41,6 +41,7 @@ jobs:
         run: |
           node tests/sealed-box.test.js
           node tests/github.test.js
+          node tests/keystore-config.test.js
 
       - name: Smoke test CLI
         run: |
@@ -52,6 +53,7 @@ jobs:
           node src/publish-apk.js apk --help > /dev/null
           node src/publish-apk.js aab --help > /dev/null
           node src/publish-apk.js keystore-env --help > /dev/null
+          node src/publish-apk.js keystore-config --help > /dev/null
           node src/publish-apk.js keystore-gen --help > /dev/null
           node src/publish-apk.js keystore --help > /dev/null
           node src/publish-apk.js huawei --help > /dev/null
@@ -415,6 +417,22 @@ jobs:
             echo 'signing-material-env --require-all 缺口令应当失败' >&2
             exit 1
           fi
+
+          # keystore-config：BASE64 + 变量生成 keystore.properties（不依赖 keytool）
+          config_b64="$(openssl base64 -A -in "$tmp/storeFile.p12")"
+          ANDROID_KEYSTORE_BASE64="$config_b64" \
+            ANDROID_KEYSTORE_PASSWORD=smoke ANDROID_KEY_ALIAS=smoke \
+            ANDROID_KEY_PASSWORD=smoke \
+            node src/publish-apk.js keystore-config \
+            --store-file "$tmp/keystore-config/publish_apk_demo.keystore" \
+            --out "$tmp/keystore-config/keystore.properties" > "$tmp/keystore-config.txt"
+          cmp "$tmp/storeFile.p12" "$tmp/keystore-config/publish_apk_demo.keystore"
+          grep -q "^storeFile=$tmp/keystore-config/publish_apk_demo.keystore$" \
+            "$tmp/keystore-config/keystore.properties"
+          grep -q '^keyAlias=smoke$' "$tmp/keystore-config/keystore.properties"
+          grep -q '^storePassword=smoke$' "$tmp/keystore-config/keystore.properties"
+          grep -q '^keyPassword=smoke$' "$tmp/keystore-config/keystore.properties"
+          grep -q "^配置文件: $tmp/keystore-config/keystore.properties$" "$tmp/keystore-config.txt"
 
           # keystore：用 keytool 生成 PKCS#12，校验口令 / 别名，并从 BASE64 落盘
           if command -v keytool > /dev/null 2>&1; then

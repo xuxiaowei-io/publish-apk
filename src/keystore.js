@@ -1,9 +1,12 @@
 /**
- * Android 签名密钥库工具（`publish-apk keystore` / `keystore-env` / `keystore-gen`）。
+ * Android 签名密钥库工具（`publish-apk keystore` / `keystore-env` / `keystore-config` / `keystore-gen`）。
  *
  *   - `keystore`：校验已有 keystore 的口令 / 别名 / 私钥；
  *   - `keystore-env`：导出 CI 变量（BASE64 / 口令 / 别名）；
  *     加 `--github` 时改为通过 GitHub REST API 一键写入 Actions 密钥，stdout 只列变量名；
+ *   - `keystore-config`：把同一组变量写成 Gradle 读取的 `keystore.properties`
+ *     （storeFile / keyAlias / storePassword / keyPassword）；给了 BASE64 时先解码落到 storeFile，
+ *     不调用 keytool；
  *   - `keystore-gen`：用 keytool 快速生成 PKCS12 / JKS。
  *
  * 定位：与具体应用市场无关的本地工具 —— 拿 CI 里那套 Android 签名变量
@@ -64,6 +67,7 @@ import { renderHelp } from './help.js'
 const COMMAND_NAME = 'keystore'
 const GEN_COMMAND_NAME = 'keystore-gen'
 const ENV_COMMAND_NAME = 'keystore-env'
+const CONFIG_COMMAND_NAME = 'keystore-config'
 
 /** 密钥库路径；与 --base64 同用时是解码后的输出路径 */
 const OPTION_FILE = '--file'
@@ -88,6 +92,12 @@ const OPTION_SEPARATOR = '--separator'
 const OPTION_INCLUDE_FILE = '--include-file'
 /** keystore-env：不输出 ANDROID_KEYSTORE_BASE64 */
 const OPTION_NO_BASE64 = '--no-base64'
+/** keystore-config：写进配置的 storeFile 值；也是 BASE64 解码后的落盘路径 */
+const OPTION_STORE_FILE = '--store-file'
+/** keystore-config：配置文件输出路径 */
+const OPTION_OUT = '--out'
+/** keystore-config：配置文件输出路径（--out 的别名） */
+const OPTION_CONFIG = '--config'
 
 const KEYSTORE_OPTIONS = new Set([
   OPTION_FILE,
@@ -124,6 +134,19 @@ const ENV_OPTIONS = new Set([
 ])
 const ENV_FLAGS = new Set([OPTION_INCLUDE_FILE, OPTION_NO_BASE64, ...GITHUB_OPTION_FLAGS])
 
+const CONFIG_OPTIONS = new Set([
+  OPTION_STORE_FILE,
+  OPTION_FILE,
+  OPTION_BASE64,
+  OPTION_KEY_ALIAS,
+  OPTION_STORE_PASSWORD,
+  OPTION_KEY_PASSWORD,
+  OPTION_OUT,
+  OPTION_CONFIG,
+  OPTION_FORCE,
+])
+const CONFIG_FLAGS = new Set([OPTION_FORCE])
+
 /** 密钥库路径，等价于 --file（也可用 ANDROID_KEYSTORE 补） */
 const ENV_FILE = 'ANDROID_KEYSTORE_FILE'
 /** ANDROID_KEYSTORE_FILE 的别名，只当文件路径用 */
@@ -136,6 +159,10 @@ const ENV_STORE_PASSWORD = 'ANDROID_KEYSTORE_PASSWORD'
 const ENV_KEY_ALIAS = 'ANDROID_KEY_ALIAS'
 /** 私钥明文口令，等价于 --key-password */
 const ENV_KEY_PASSWORD = 'ANDROID_KEY_PASSWORD'
+/** keystore-config：写进配置的 storeFile 值，等价于 --store-file */
+const ENV_STORE_FILE = 'ANDROID_STORE_FILE'
+/** keystore-config：配置文件输出路径，等价于 --out */
+const ENV_CONFIG = 'ANDROID_KEYSTORE_CONFIG'
 
 /** BASE64 里的空白（粘贴长内容时常见） */
 const BASE64_WHITESPACE = /\s+/g
@@ -373,6 +400,7 @@ function writeKeystoreFile(outPath, buffer, help) {
     const stamp = new Date().toISOString().replace(/[:.]/g, '-')
     const backup = `${absolute}.bak-${stamp}`
     fs.copyFileSync(absolute, backup)
+    fs.chmodSync(backup, 0o600)
     stderr(`警告: 已有 keystore 不同，已备份到 ${backup}`)
   }
   fs.mkdirSync(path.dirname(absolute), { recursive: true })
@@ -862,6 +890,7 @@ async function runKeystoreGen(argv, env) {
       const stamp = new Date().toISOString().replace(/[:.]/g, '-')
       const backup = `${absolute}.bak-${stamp}`
       fs.copyFileSync(absolute, backup)
+      fs.chmodSync(backup, 0o600)
       stderr(`警告: 已有 keystore，已备份到 ${backup}`)
     }
     fs.renameSync(tempFile, absolute)
@@ -1087,6 +1116,320 @@ async function runKeystoreEnv(argv, env) {
   stderr('警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享')
   stdout(renderKeystoreEnvVariables(values, format, options, renderKeystoreEnvHelp()))
   return EXIT_OK
+}
+
+/** Java .properties 单行值转义：反斜杠、控制字符、非 ASCII 与行首空格 */
+function escapePropertiesValue(value) {
+  let escaped = ''
+  let leading = true
+  for (const char of value) {
+    const code = char.codePointAt(0)
+    if (char === '\\') {
+      escaped += '\\\\'
+      leading = false
+    } else if (char === '\t') {
+      escaped += '\\t'
+      leading = false
+    } else if (char === '\n') {
+      escaped += '\\n'
+      leading = false
+    } else if (char === '\r') {
+      escaped += '\\r'
+      leading = false
+    } else if (char === '\f') {
+      escaped += '\\f'
+      leading = false
+    } else if (char === ' ' && leading) {
+      // Properties.load 会跳过值开头的空白，行首空格必须转义
+      escaped += '\\ '
+    } else if (code < 0x20 || code > 0x7e) {
+      // Properties.load 默认按 ISO-8859-1 读取，非 ASCII 用 \uXXXX 才能被 Gradle 正确还原
+      const units = []
+      for (let index = 0; index < char.length; index += 1) {
+        units.push(`\\u${char.charCodeAt(index).toString(16).padStart(4, '0')}`)
+      }
+      escaped += units.join('')
+      leading = false
+    } else {
+      escaped += char
+      leading = false
+    }
+  }
+  return escaped
+}
+
+/** 生成 Gradle 读取的 keystore.properties；顺序与 Android 社区惯例一致 */
+function renderKeystoreProperties({ storeFile, alias, storePassword, keyPassword }) {
+  return (
+    [
+      `storeFile=${escapePropertiesValue(storeFile)}`,
+      `keyAlias=${escapePropertiesValue(alias)}`,
+      `storePassword=${escapePropertiesValue(storePassword)}`,
+      `keyPassword=${escapePropertiesValue(keyPassword)}`,
+    ].join('\n') + '\n'
+  )
+}
+
+/** 检查配置文件目标：不是普通文件或内容不同且没加 --force 时提前失败 */
+function inspectConfigTarget(outPath, content, force, help) {
+  const absolute = path.resolve(outPath)
+  if (!fs.existsSync(absolute)) {
+    return { path: absolute, exists: false, reused: false }
+  }
+  if (!fs.statSync(absolute).isFile()) {
+    throw new UsageError(`配置文件输出路径不是普通文件: ${outPath}`, help)
+  }
+  const reused = fs.readFileSync(absolute).equals(Buffer.from(content, 'utf8'))
+  if (!reused && !force) {
+    throw new UsageError(
+      `配置文件已存在且内容不同: ${absolute}；如需覆盖请加 ${OPTION_FORCE}（会先备份）`,
+      help,
+    )
+  }
+  return { path: absolute, exists: true, reused }
+}
+
+/** 写配置文件：相同内容复用，不同内容先备份（调用方已用 --force 放行）；权限固定 0600 */
+function writeConfigFile(outPath, content, force, help) {
+  const target = inspectConfigTarget(outPath, content, force, help)
+  if (target.reused) {
+    fs.chmodSync(target.path, 0o600)
+    return { path: target.path, reused: true }
+  }
+  if (target.exists) {
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const backup = `${target.path}.bak-${stamp}`
+    fs.copyFileSync(target.path, backup)
+    fs.chmodSync(backup, 0o600)
+    stderr(`警告: 已有配置文件不同，已备份到 ${backup}`)
+  }
+  fs.mkdirSync(path.dirname(target.path), { recursive: true })
+  fs.writeFileSync(target.path, content, { mode: 0o600 })
+  fs.chmodSync(target.path, 0o600)
+  return { path: target.path, reused: false }
+}
+
+/** keystore-config 未显式给 storeFile 时的默认落盘路径（只在给了 BASE64 时使用） */
+function defaultConfigStoreFile(alias) {
+  return `./${alias.replace(/[\\/:*?"<>|]/g, '_')}.keystore`
+}
+
+/** keystore-config 帮助文档 */
+function renderKeystoreConfigHelp() {
+  return renderHelp({
+    title: `${PROGRAM} ${CONFIG_COMMAND_NAME} - 由变量生成 Android 签名配置文件`,
+    usage: [`${PROGRAM} ${CONFIG_COMMAND_NAME} [选项]`],
+    sections: [
+      {
+        title: '选项',
+        entries: [
+          [
+            `${OPTION_STORE_FILE} <值>`,
+            `写进配置的 storeFile；给了 ${OPTION_BASE64} 时也是解码后的落盘路径，省略时默认 ./<keyAlias>.keystore（可用 ${ENV_STORE_FILE} / ${ENV_FILE} / ${ENV_KEYSTORE} 补齐）`,
+          ],
+          [
+            `${OPTION_FILE} <路径>`,
+            `${OPTION_STORE_FILE} 的别名；给了 ${OPTION_BASE64} 时是解码后的输出路径`,
+          ],
+          [
+            `${OPTION_BASE64} <BASE64>`,
+            `keystore 的 BASE64 内容（可用 ${ENV_BASE64} 补齐）；给出后先解码写到 storeFile，再生成配置`,
+          ],
+          [
+            `${OPTION_KEY_ALIAS} <别名>`,
+            `写进配置的 keyAlias（可用 ${ENV_KEY_ALIAS} 补齐）`,
+          ],
+          [
+            `${OPTION_STORE_PASSWORD} <明文>`,
+            `写进配置的 storePassword（可用 ${ENV_STORE_PASSWORD} 补齐；建议用环境变量或交互输入）`,
+          ],
+          [
+            `${OPTION_KEY_PASSWORD} <明文>`,
+            `写进配置的 keyPassword（可用 ${ENV_KEY_PASSWORD} 补齐）；不传时用 storePassword`,
+          ],
+          [
+            `${OPTION_OUT} <路径>`,
+            `配置文件输出路径，默认 ./keystore.properties（可用 ${ENV_CONFIG} 补齐）；写 - 时输出到 stdout`,
+          ],
+          [`${OPTION_CONFIG} <路径>`, `${OPTION_OUT} 的别名`],
+          [
+            OPTION_FORCE,
+            '配置文件已存在且内容不同时，先备份为 .bak-<时间戳> 再覆盖；默认拒绝覆盖',
+          ],
+          ['-h, --help', '显示帮助信息'],
+        ],
+      },
+      {
+        title: '环境变量',
+        entries: [
+          [ENV_BASE64, `keystore 的 BASE64 内容，等价于 ${OPTION_BASE64}`],
+          [
+            ENV_STORE_FILE,
+            `storeFile 的值，等价于 ${OPTION_STORE_FILE}；未设置时取 ${ENV_FILE}`,
+          ],
+          [ENV_FILE, `storeFile 的值（${ENV_STORE_FILE} 未设置时使用）`],
+          [ENV_KEYSTORE, `${ENV_FILE} 的别名`],
+          [ENV_KEY_ALIAS, `keyAlias，等价于 ${OPTION_KEY_ALIAS}`],
+          [ENV_STORE_PASSWORD, `storePassword，等价于 ${OPTION_STORE_PASSWORD}`],
+          [ENV_KEY_PASSWORD, `keyPassword，等价于 ${OPTION_KEY_PASSWORD}`],
+          [ENV_CONFIG, `配置文件输出路径，等价于 ${OPTION_OUT}`],
+        ],
+      },
+      {
+        title: '输出',
+        entries: [
+          [
+            'stdout',
+            '配置文件路径与非敏感字段（storeFile / keyAlias）；口令只写文件，不回显；--out - 时原样输出配置内容',
+          ],
+          ['stderr', 'BASE64 落盘、生成、备份与明文口令警告'],
+        ],
+      },
+      {
+        title: '退出代码',
+        entries: [
+          ['0', '生成成功（或已有文件内容相同，直接复用）'],
+          ['1', '参数缺失、参数错误、BASE64 不合法、文件已存在（未加 --force）或文件读写失败'],
+        ],
+      },
+    ],
+    notes: [
+      '示例:',
+      `  ANDROID_KEYSTORE_BASE64="$(openssl base64 -A -in publish_apk_demo.keystore)" \\`,
+      `    ANDROID_KEYSTORE_PASSWORD=<口令> ANDROID_KEY_ALIAS=publish_apk_demo \\`,
+      `    ANDROID_KEY_PASSWORD=<口令> \\`,
+      `    ${PROGRAM} ${CONFIG_COMMAND_NAME} \\`,
+      `    --store-file ../../publish_apk_demo.keystore --out ./app/keystore.properties`,
+      `  ANDROID_KEYSTORE_BASE64=<BASE64> ANDROID_KEYSTORE_PASSWORD=<口令> \\`,
+      `    ANDROID_KEY_ALIAS=publish_apk_demo ${PROGRAM} ${CONFIG_COMMAND_NAME}`,
+      `  ${PROGRAM} ${CONFIG_COMMAND_NAME} --store-file ./release.jks --key-alias release \\`,
+      `    --store-password <口令> --out -`,
+      '',
+      '说明: 给了 --base64 / ANDROID_KEYSTORE_BASE64 时，先解码写到 storeFile（权限 0600），再写配置文件',
+      '说明: 没给 storeFile 时默认 ./<keyAlias>.keystore（只在给了 BASE64 时自动使用）',
+      '说明: 本命令不调用 keytool；需要校验密钥库口令 / 别名时，先用 keystore 命令校验，再生成配置',
+      '说明: 配置文件权限固定 0600；文件含明文口令，请勿提交仓库或公开分享',
+      '说明: 配置文件已存在相同内容时复用；内容不同时默认拒绝，--force 会先备份再覆盖',
+      '说明: --out - 会把含明文口令的配置写到 stdout，只建议在管道里临时使用',
+    ],
+  })
+}
+
+/** keystore-config：解析必填值，并校验不能跨行 */
+function resolveConfigValue(value, label, help) {
+  if (value === undefined) {
+    throw new UsageError(`缺少 ${label}`, help)
+  }
+  if (/[\r\n\0]/.test(value)) {
+    throw new UsageError(`${label} 不能包含换行或 NUL 字符`, help)
+  }
+  return value
+}
+
+async function runKeystoreConfig(argv, env) {
+  if (argv.some((token) => isHelpToken(token))) {
+    stdout(renderKeystoreConfigHelp())
+    return EXIT_OK
+  }
+
+  const help = renderKeystoreConfigHelp
+  const options = parseOptions(argv, CONFIG_OPTIONS, help, CONFIG_FLAGS)
+
+  if (options.has(OPTION_STORE_FILE) && options.has(OPTION_FILE)) {
+    throw new UsageError(`${OPTION_STORE_FILE} 与 ${OPTION_FILE} 只能选一个`, help())
+  }
+  if (options.has(OPTION_OUT) && options.has(OPTION_CONFIG)) {
+    throw new UsageError(`${OPTION_OUT} 与 ${OPTION_CONFIG} 只能选一个`, help())
+  }
+
+  const base64 = options.get(OPTION_BASE64) ?? readEnv(env, ENV_BASE64)
+  const alias = resolveConfigValue(
+    options.get(OPTION_KEY_ALIAS) ?? readEnv(env, ENV_KEY_ALIAS),
+    `keyAlias：请用 ${OPTION_KEY_ALIAS} 或 ${ENV_KEY_ALIAS}`,
+    help(),
+  )
+
+  const explicitStoreFile =
+    options.get(OPTION_STORE_FILE) ??
+    options.get(OPTION_FILE) ??
+    readEnv(env, ENV_STORE_FILE) ??
+    readEnv(env, ENV_FILE) ??
+    readEnv(env, ENV_KEYSTORE)
+  const storeFile = resolveConfigValue(
+    explicitStoreFile ?? (base64 === undefined ? undefined : defaultConfigStoreFile(alias)),
+    `storeFile：请用 ${OPTION_STORE_FILE}（或 ${OPTION_FILE} / ${ENV_STORE_FILE} / ${ENV_FILE}）；` +
+      `给了 ${OPTION_BASE64} 时可省略，默认 ./<keyAlias>.keystore`,
+    help(),
+  )
+
+  const storePassword = resolveConfigValue(
+    await resolveStorePassword(options, env, help),
+    'storePassword',
+    help(),
+  )
+  const keyPassword = resolveConfigValue(
+    options.get(OPTION_KEY_PASSWORD) ?? readEnv(env, ENV_KEY_PASSWORD) ?? storePassword,
+    'keyPassword',
+    help(),
+  )
+
+  const outValue =
+    options.get(OPTION_OUT) ??
+    options.get(OPTION_CONFIG) ??
+    readEnv(env, ENV_CONFIG) ??
+    'keystore.properties'
+
+  if (outValue !== '-' && path.resolve(outValue) === path.resolve(storeFile)) {
+    throw new UsageError(`配置文件输出路径不能与 storeFile 相同: ${outValue}`, help())
+  }
+
+  const content = renderKeystoreProperties({ storeFile, alias, storePassword, keyPassword })
+  const force = options.get(OPTION_FORCE) === true
+  // 先确认配置文件可写（已存在不同内容又没加 --force 时直接失败），避免先改了 keystore 才报错
+  if (outValue !== '-') {
+    inspectConfigTarget(outValue, content, force, help())
+  }
+
+  if (base64 !== undefined) {
+    const buffer = decodeKeystoreBase64(base64, help())
+    if (keystoreTypeFromMagic(buffer) === undefined) {
+      throw new UsageError(
+        'BASE64 解码后不是 JKS / JCEKS / PKCS12 密钥库（文件头无法识别）',
+        help(),
+      )
+    }
+    const written = writeKeystoreFile(storeFile, buffer, help())
+    stderr(
+      `keystore 已写入: ${written.path}${written.reused ? '（与现有文件相同，复用）' : ''}`,
+    )
+  }
+
+  if (outValue === '-') {
+    stderr('警告: 输出包含明文口令，请勿写入日志、提交仓库或公开分享')
+    stdout(content.endsWith('\n') ? content.slice(0, -1) : content)
+    return EXIT_OK
+  }
+
+  const written = writeConfigFile(outValue, content, force, help())
+  stderr(
+    `配置文件已生成: ${written.path}${written.reused ? '（与现有文件相同，复用）' : ''}`,
+  )
+  stdout(
+    [
+      `配置文件: ${written.path}`,
+      `storeFile: ${storeFile}`,
+      `keyAlias: ${alias}`,
+      'storePassword: （已写入，不回显）',
+      'keyPassword: （已写入，不回显）',
+    ].join('\n'),
+  )
+  return EXIT_OK
+}
+
+export const keystoreConfigCommand = {
+  name: CONFIG_COMMAND_NAME,
+  summary: '由 ANDROID_* 变量生成 Android 签名配置文件（keystore.properties）',
+  run: runKeystoreConfig,
 }
 
 export const keystoreEnvCommand = {

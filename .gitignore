@@ -46,6 +46,9 @@ build/
 *.jks.bak-*
 *.keystore.bak-*
 build-profile.json5
+# keystore-config 默认生成的文件（含明文口令）
+keystore.properties
+keystore.properties.bak-*
 
 # 签名配置 --write 的改前备份
 .signing/
