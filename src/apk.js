@@ -943,6 +943,9 @@ function aabLines(buffer, path, entries, manifest, v1Groups, verbose) {
     lines.push(`调试: ${manifest.debuggable === true ? '是' : '否'}`)
   }
   addSignatureCertificates(lines, v1Groups, verbose, { md5: true })
+  if (!verbose) {
+    lines.push('', '（加 --verbose 查看全部字段：ZIP 条目、BundleConfig.pb、完整证书链与全部 Activity）')
+  }
   return lines
 }
 
