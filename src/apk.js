@@ -156,7 +156,8 @@ function renderApkHelp() {
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: AndroidManifest.xml 是二进制 XML；本命令直接解析，不依赖 aapt / apkanalyzer',
       '说明: 签名只检测 JAR v1 与 APK Signature Scheme v2 / v3 / v3.1，未执行证书链与摘要验签',
-      '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
+      '说明: 签名证书默认输出叶子证书的 MD5 / SHA-256 指纹；--verbose 输出完整证书链与 SHA-1 / SHA-512 指纹',
+      '说明: MD5 指纹是证书 DER 的摘要（XX:XX:… 大写形式），与 keytool、Android Studio 的签名报告一致',
       '说明: 不输出证书 PEM 原文；APK 里没有私钥',
     ],
   })
@@ -210,7 +211,8 @@ function renderAabHelp() {
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
       '说明: AAB 是 ZIP，Manifest 在 base/manifest/AndroidManifest.xml；本命令直接解析二进制 XML',
       '说明: AAB 使用 JAR v1 签名（META-INF/*.RSA 等），本命令提取证书但不执行验签',
-      '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
+      '说明: 签名证书默认输出叶子证书的 MD5 / SHA-256 指纹；--verbose 输出完整证书链与 SHA-1 / SHA-512 指纹',
+      '说明: MD5 指纹是证书 DER 的摘要（XX:XX:… 大写形式），与 keytool、Android Studio 的签名报告一致',
       '说明: 不输出证书 PEM 原文；AAB 里没有私钥',
     ],
   })
@@ -756,9 +758,12 @@ function apkLines(buffer, path, entries, manifest, signing, verbose) {
   if (manifest.debuggable !== undefined) {
     lines.push(`调试: ${manifest.debuggable === true ? '是' : '否'}`)
   }
-  addSignatureCertificates(lines, certificateGroups, verbose)
+  addSignatureCertificates(lines, certificateGroups, verbose, { md5: true })
   if (signing.schemes.length > 0 && certificateGroups.length === 0) {
     lines.push('', '签名证书: 未解析到证书（仅检测到签名块）')
+  }
+  if (!verbose) {
+    lines.push('', '（加 --verbose 查看全部字段：ZIP 条目、签名块 pair、完整证书链与全部 Activity）')
   }
   return { lines, v1Groups, certificateGroups }
 }
@@ -937,7 +942,7 @@ function aabLines(buffer, path, entries, manifest, v1Groups, verbose) {
   if (manifest.debuggable !== undefined) {
     lines.push(`调试: ${manifest.debuggable === true ? '是' : '否'}`)
   }
-  addSignatureCertificates(lines, v1Groups, verbose)
+  addSignatureCertificates(lines, v1Groups, verbose, { md5: true })
   return lines
 }
 

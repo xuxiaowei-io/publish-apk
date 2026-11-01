@@ -559,7 +559,7 @@ function orderCertificateChain(certificates) {
 }
 
 /** 输出签名证书；默认只输出每组的第一张，--verbose 输出完整证书链 */
-export function addSignatureCertificates(lines, groups, verbose) {
+export function addSignatureCertificates(lines, groups, verbose, options = {}) {
   if (groups.length === 0) {
     return
   }
@@ -578,7 +578,7 @@ export function addSignatureCertificates(lines, groups, verbose) {
     const selected = verbose ? chain : chain.slice(0, 1)
     selected.forEach((certificate, index) => {
       lines.push(`证书 #${index + 1}:`)
-      for (const detail of certificateDetailLines(certificate, verbose)) {
+      for (const detail of certificateDetailLines(certificate, verbose, options)) {
         lines.push(`  ${detail}`)
       }
     })

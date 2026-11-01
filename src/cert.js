@@ -575,6 +575,11 @@ function describeSelfSigned(certificate) {
   }
 }
 
+/** 证书 DER 的 MD5 指纹，keytool 的 XX:XX:… 大写形式 */
+function certificateMd5Fingerprint(certificate) {
+  return formatHex(createHash('md5').update(certificate.raw).digest())
+}
+
 /** 公钥 SPKI 的 SHA-256 指纹（全部字段时输出） */
 function publicKeyFingerprint(key) {
   try {
@@ -600,7 +605,7 @@ function serialDecimal(serialNumber) {
 }
 
 /** 一行的字段集合：同一张证书的默认字段与 --verbose 追加字段都从这里生成 */
-function certificateLines(certificate, verbose, parsed) {
+function certificateLines(certificate, verbose, parsed, options = {}) {
   const lines = []
 
   lines.push(line('主题', oneLineName(certificate.subject)))
@@ -661,6 +666,9 @@ function certificateLines(certificate, verbose, parsed) {
     lines.push(line('公钥指纹(SHA-256)', publicKeyFingerprint(certificate.publicKey)))
   }
 
+  if (options.md5 === true) {
+    lines.push(line('MD5 指纹', certificateMd5Fingerprint(certificate)))
+  }
   if (verbose) {
     lines.push(line('SHA-1 指纹', certificate.fingerprint))
   }
@@ -687,9 +695,12 @@ function certificateLines(certificate, verbose, parsed) {
  *
  * cert 命令内部已经在用 certificateLines；这里只包一层 DER 解析，避免其它模块
  * 重复实现「证书 → 可读字段」的逻辑。
+ *
+ * options.md5 为 true 时追加 MD5 指纹（Android 市场 / 微信等平台注册签名要用），
+ * 默认关闭，避免 cert / hap 等命令的输出字段发生变化。
  */
-export function certificateDetailLines(certificate, verbose = false) {
-  return certificateLines(certificate, verbose, parseCertificateDerSafe(certificate.raw))
+export function certificateDetailLines(certificate, verbose = false, options = {}) {
+  return certificateLines(certificate, verbose, parseCertificateDerSafe(certificate.raw), options)
 }
 
 /** 一张证书的全部输出行；多张证书时用 `#N` 标题分隔 */

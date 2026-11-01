@@ -468,7 +468,8 @@ APK_VERBOSE=1 publish-apk apk --file ./app.apk
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.apk`）；按参数顺序逐个输出，文件之间空一行。
 - 默认输出：文件大小、ZIP 条目数、签名状态与签名方案、包名、版本 / versionCode、
-  Min / Target / 编译 SDK、ABI、DEX 数量、权限、启动 Activity，以及签名证书（叶子证书）。
+  Min / Target / 编译 SDK、ABI、DEX 数量、权限、启动 Activity，以及签名证书（叶子证书，
+  含 MD5 / SHA-256 指纹）；末尾会附一行 `（加 --verbose 查看全部字段…）` 提示，`--verbose` 时不再输出。
 - `--verbose` / `APK_VERBOSE=1` 追加：应用标签、允许备份、uses-feature、全部 Activity，
   APK Signing Block 的 pair（v2 / v3 / v3.1 / Source Stamp / Verity Padding）、
   全部 ZIP 条目与完整签名证书链。
@@ -494,7 +495,8 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.aab`）；按参数顺序逐个输出，文件之间空一行。
 - 默认输出：文件大小、ZIP 条目数、JAR v1 签名状态、包名、版本 / versionCode、
-  Min / Target / 编译 SDK、模块列表、ABI、DEX 数量、权限、启动 Activity，以及签名证书（叶子证书）。
+  Min / Target / 编译 SDK、模块列表、ABI、DEX 数量、权限、启动 Activity，以及签名证书
+  （叶子证书，含 MD5 / SHA-256 指纹）。
 - `--verbose` / `AAB_VERBOSE=1` 追加：应用标签、允许备份、uses-feature、全部 Activity、
   `BundleConfig.pb` 大小、全部 ZIP 条目与完整签名证书链。
 - 签名只做检测，**不执行证书链、摘要或签名验签**；输出里会明确写「未验签」。
