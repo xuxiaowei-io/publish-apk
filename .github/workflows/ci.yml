@@ -47,6 +47,10 @@ jobs:
           node tests/release-sync-gitee-source.test.js
           node tests/release-sync-github.test.js
           node tests/release-sync-github-source.test.js
+          node tests/release-sync-gitcode.test.js
+          node tests/release-sync-gitcode-source.test.js
+          node tests/release-sync-gitlab.test.js
+          node tests/release-sync-gitlab-source.test.js
 
       - name: Smoke test CLI
         run: |

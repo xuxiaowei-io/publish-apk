@@ -6,7 +6,7 @@
 `keystore`（校验 Android 签名密钥库的口令 / 别名，BASE64 可落盘）、`keystore-env`（导出 CI 变量）、
 `keystore-config`（由 BASE64 / 变量生成 `keystore.properties`）与 `keystore-gen`（快速生成密钥库）。
 Git 发布同步用 `release-sync`：把一个仓库的 Release（发布说明 + 附件）同步到另一个仓库，
-目标标签不存在时按分支创建、目标多余附件按源清理；目前支持 CNB（cnb.cool）、Gitee（gitee.com）与 GitHub（github.com）。
+目标标签不存在时按分支创建、目标多余附件按源清理；目前支持 CNB（cnb.cool）、Gitee（gitee.com）、GitHub（github.com）、GitCode（gitcode.com）与 GitLab（gitlab.com / 自建）。
 华为侧另有 `huawei signing-config`，用 `.cer` / `.p7b` / `.p12` 与明文口令生成 `build-profile.json5` 的签名配置。
 
 - 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`，
@@ -512,7 +512,7 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 ### release-sync（同步 Git 发布）
 
 把一个仓库的 Release（**源**）同步到另一个仓库的 Release（**目标**）。
-目前支持 **CNB（cnb.cool）、Gitee（gitee.com）与 GitHub（github.com）互相同步**；GitHub Enterprise 可通过 API / 上传地址覆盖。
+目前支持 **CNB（cnb.cool）、Gitee（gitee.com）、GitHub（github.com）、GitCode（gitcode.com）与 GitLab（gitlab.com / 自建）互相同步**；GitHub Enterprise 可通过 API / 上传地址覆盖。
 
 同步内容包括：
 
@@ -550,6 +550,14 @@ CNB_SOURCE_TOKEN=<CNB令牌> GITEE_TARGET_TOKEN=<Gitee令牌> \
 CNB_SOURCE_TOKEN=<CNB令牌> GITHUB_TARGET_TOKEN=<GitHub令牌> \
   publish-apk release-sync --source org/source --target github.com/owner/repo --tag v1.0.0
 
+# 同步到 GitCode（先取 upload_url 再 PUT）
+CNB_SOURCE_TOKEN=<CNB令牌> GITCODE_TARGET_TOKEN=<GitCode令牌> \
+  publish-apk release-sync --source org/source --target gitcode.com/owner/repo --tag v1.0.0
+
+# 同步到 GitLab（Release 不能传文件，直接生成下载表格）
+CNB_SOURCE_TOKEN=<CNB令牌> GITLAB_TARGET_TOKEN=<GitLab令牌> \
+  publish-apk release-sync --source org/source --target gitlab.com/group/project --tag v1.0.0
+
 # 令牌只走环境变量，避免进入 ps / shell 历史
 CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
   publish-apk release-sync --source org/source --target org/target --tag v1.0.0
@@ -562,10 +570,10 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 | `--tag <标签>` | `RELEASE_SYNC_TAG` | 要同步的发布标签；不给时同步最新发布 |
 | `--latest` | — | 明确同步最新发布；与 `--tag` 互斥，两者都不给时默认最新 |
 | `--target-branch <分支>` | `RELEASE_SYNC_TARGET_BRANCH` | 目标标签不存在时基于哪个分支创建；未指定时优先用目标仓库默认分支（Gitee 可查询），否则 `main` |
-| `--source-token <令牌>` | `RELEASE_SYNC_SOURCE_TOKEN` / `CNB_SOURCE_TOKEN` / `CNB_TOKEN` / `GITEE_SOURCE_TOKEN` / `GITEE_TOKEN` / `GITHUB_SOURCE_TOKEN` / `GITHUB_TOKEN` | 源仓库令牌（只读即可） |
-| `--target-token <令牌>` | `RELEASE_SYNC_TARGET_TOKEN` / `CNB_TARGET_TOKEN` / `CNB_TOKEN` / `GITEE_TARGET_TOKEN` / `GITEE_TOKEN` / `GITHUB_TARGET_TOKEN` / `GITHUB_TOKEN` | 目标仓库令牌（需要写权限） |
-| `--source-api-base <地址>` | `RELEASE_SYNC_SOURCE_API_BASE` / `CNB_SOURCE_API_BASE` / `CNB_API_BASE` / `GITEE_SOURCE_API_BASE` / `GITEE_API_BASE` / `GITHUB_SOURCE_API_BASE` / `GITHUB_API_BASE` / `GITHUB_API_URL` | 源平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` / GitHub `https://api.github.com` |
-| `--target-api-base <地址>` | `RELEASE_SYNC_TARGET_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` / `GITEE_TARGET_API_BASE` / `GITEE_API_BASE` / `GITHUB_TARGET_API_BASE` / `GITHUB_API_BASE` / `GITHUB_API_URL` | 目标平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` / GitHub `https://api.github.com` |
+| `--source-token <令牌>` | `RELEASE_SYNC_SOURCE_TOKEN` / `CNB_SOURCE_TOKEN` / `CNB_TOKEN` / `GITEE_SOURCE_TOKEN` / `GITEE_TOKEN` / `GITHUB_SOURCE_TOKEN` / `GITHUB_TOKEN` / `GITCODE_SOURCE_TOKEN` / `GITCODE_TOKEN` / `GITLAB_SOURCE_TOKEN` / `GITLAB_TOKEN` | 源仓库令牌（只读即可） |
+| `--target-token <令牌>` | `RELEASE_SYNC_TARGET_TOKEN` / `CNB_TARGET_TOKEN` / `CNB_TOKEN` / `GITEE_TARGET_TOKEN` / `GITEE_TOKEN` / `GITHUB_TARGET_TOKEN` / `GITHUB_TOKEN` / `GITCODE_TARGET_TOKEN` / `GITCODE_TOKEN` / `GITLAB_TARGET_TOKEN` / `GITLAB_TOKEN` | 目标仓库令牌（需要写权限） |
+| `--source-api-base <地址>` | `RELEASE_SYNC_SOURCE_API_BASE` / `CNB_SOURCE_API_BASE` / `CNB_API_BASE` / `GITEE_SOURCE_API_BASE` / `GITEE_API_BASE` / `GITHUB_SOURCE_API_BASE` / `GITHUB_API_BASE` / `GITHUB_API_URL` / `GITCODE_SOURCE_API_BASE` / `GITCODE_API_BASE` / `GITLAB_SOURCE_API_BASE` / `GITLAB_API_BASE` | 源平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` / GitHub `https://api.github.com` / GitCode `https://api.gitcode.com/api/v5` / GitLab `https://gitlab.com/api/v4` |
+| `--target-api-base <地址>` | `RELEASE_SYNC_TARGET_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` / `GITEE_TARGET_API_BASE` / `GITEE_API_BASE` / `GITHUB_TARGET_API_BASE` / `GITHUB_API_BASE` / `GITHUB_API_URL` / `GITCODE_TARGET_API_BASE` / `GITCODE_API_BASE` / `GITLAB_TARGET_API_BASE` / `GITLAB_API_BASE` | 目标平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` / GitHub `https://api.github.com` / GitCode `https://api.gitcode.com/api/v5` / GitLab `https://gitlab.com/api/v4` |
 | `--dry-run` | — | 只读取源发布与目标状态并打印计划（含待删除的附件），不产生写请求 |
 | `--verbose` | `RELEASE_SYNC_VERBOSE` | 输出详细日志（接口地址、发布 ID、hash 校验结果等） |
 
@@ -576,6 +584,8 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 | `https://cnb.cool/org/repo` | 完整网页地址，可带 `.git` 后缀 |
 | `https://gitee.com/owner/repo` | Gitee 仓库地址；也可写 `gitee.com/owner/repo` |
 | `https://github.com/owner/repo` | GitHub 仓库地址；也可写 `github.com/owner/repo` |
+| `https://gitcode.com/owner/repo` | GitCode 仓库地址；也可写 `gitcode.com/owner/repo` |
+| `https://gitlab.com/group/project` | GitLab 项目地址；支持 `group/subgroup/project` 多级命名空间 |
 | `cnb.cool/org/repo` | 省略协议 |
 | `git@cnb.cool:org/repo.git` | SCP 风格 SSH 地址 |
 | `org/repo` | 省略 host 时按 CNB 处理；组织名可带点，如 `xuxiaowei.io/repo`；Gitee 请写清 host |
@@ -588,6 +598,8 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 | CNB 目标仓库 | `repo-release:rw` | 创建标签、创建 / 更新发布、上传 / 确认 / 删除附件 |
 | Gitee 令牌 | 私人访问令牌（`projects` 读写） | 发布 / 标签 / 附件读取；目标为 Gitee 时不尝试上传附件 |
 | GitHub 令牌 | Contents 读写（fine-grained）或 `repo`（classic） | 发布 / 标签 / 附件读写；源仓库只需读 |
+| GitCode 令牌 | 仓库 / 发布读写权限 | 发布 / 标签 / 附件读写；源仓库只需读 |
+| GitLab 令牌 | `api` / `write_repository` | 发布 / 标签 / Release Links；源仓库只需读 |
 
 - 目标标签不存在时创建标签：CNB 用 `POST /{repo}/-/git/tags`（`target` 取目标分支，轻量标签）；
   Gitee 用 `POST /repos/{owner}/{repo}/tags`（`refs` 取目标分支）。
@@ -613,6 +625,15 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
   用 `/api/uploads`；可用 `GITHUB_*_UPLOAD_BASE` 覆盖。
 - GitHub 偶发「附件已落盘但上传接口返回 404」：会按同名 + 大小 + sha256 digest 复核，确认已存在则
   按成功处理，避免重复上传。
+- **GitCode 目标正常上传附件**：先 `GET /releases/{tag}/upload_url` 取预签名地址与 `x-obs-*` 请求头，
+  再 PUT 文件；同名附件先删后传，digest 一致时跳过，目标多余附件在最后删除。
+- GitCode 的 Release 路径按 **tag** 操作（更新 / 删除附件 / 下载），且 Release 可能不返回 `id`；
+  同步层自动用 tag 作为标识。GitCode 的自动源码包（`type=source`）会被忽略，不当作发布产物。
+- **GitLab 目标也走下载表格**：GitLab Release 原生只有 `assets.links`（链接）和 `assets.sources`
+  （自动源码包），不能上传任意附件。目标为 GitLab 时不下载 / 不上传，直接生成 Markdown 表格；
+  GitLab 目标已有的 Release Link 视为发布者内容，保留不删（可能是文档等非产物链接）。
+- 源为 GitLab 时，`assets.links` 会被当作发布产物；链接可下载时再上传到 CNB / GitHub / GitCode，
+  目标为 GitLab / Gitee 时只写表格链接。`assets.sources` 自动源码包忽略。
 
 Gitee 目标生成的下载表格大致如下（带隐藏标记，重跑会替换而不是追加）：
 
@@ -631,8 +652,9 @@ Gitee 目标生成的下载表格大致如下（带隐藏标记，重跑会替�
 「目标平台不支持附件上传，已写入发布说明的 Markdown 下载表格」。
 
 **平台扩展**：`src/release-sync.js` 只做编排，平台能力由适配器提供；当前适配器是
-[src/cnb.js](src/cnb.js)、[src/gitee.js](src/gitee.js) 与 [src/github-release.js](src/github-release.js)。
-接入其它平台时照它们的形状新增适配器并注册到 `PROVIDERS` 即可，命令、选项与摘要格式不需要改。
+[src/cnb.js](src/cnb.js)、[src/gitee.js](src/gitee.js)、[src/github-release.js](src/github-release.js) 与
+[src/gitcode.js](src/gitcode.js) 与 [src/gitlab.js](src/gitlab.js)。接入其它平台时照它们的形状新增
+适配器并注册到 `PROVIDERS` 即可，命令、选项与摘要格式不需要改。
 目标平台不接受附件上传时，适配器声明 `assetUploadDirectToTable: true`，编排会直接生成下载表格、
 不下载源附件（Gitee 就是这样）。
 
@@ -1542,10 +1564,10 @@ publish-apk huawei service-account-upload-url
 | `GITHUB_REPOSITORY` | `--github-repo` | `owner/repo`；Actions 自动注入；未给 `--github-repo` 时用它 |
 | `GITHUB_API_URL` | — | API 地址，默认 `https://api.github.com`；GitHub Enterprise 用 `https://host/api/v3` |
 
-### Git 发布同步（`RELEASE_SYNC_*` / `CNB_*` / `GITEE_*` / `GITHUB_*`）
+### Git 发布同步（`RELEASE_SYNC_*` / `CNB_*` / `GITEE_*` / `GITHUB_*` / `GITCODE_*` / `GITLAB_*`）
 
 只用于 `release-sync`；不会影响其它命令。带值的选项都有环境变量兜底，**命令行选项优先**；
-源与目标的令牌 / API 地址可以分开给，也可以用 `CNB_TOKEN` / `CNB_API_BASE`、`GITEE_TOKEN` / `GITEE_API_BASE` 或 `GITHUB_TOKEN` / `GITHUB_API_BASE` 让同平台两者共用。
+源与目标的令牌 / API 地址可以分开给，也可以用 `CNB_TOKEN` / `CNB_API_BASE`、`GITEE_TOKEN` / `GITEE_API_BASE`、`GITHUB_TOKEN` / `GITHUB_API_BASE`、`GITCODE_TOKEN` / `GITCODE_API_BASE` 或 `GITLAB_TOKEN` / `GITLAB_API_BASE` 让同平台两者共用。
 
 | 环境变量 | 等价选项 | 说明 |
 | --- | --- | --- |
@@ -1571,6 +1593,14 @@ publish-apk huawei service-account-upload-url
 | `GITHUB_TOKEN` | — | 源 / 目标共用的 GitHub 令牌 |
 | `GITHUB_SOURCE_API_BASE` / `GITHUB_TARGET_API_BASE` / `GITHUB_API_BASE` / `GITHUB_API_URL` | — | GitHub API 地址覆盖；默认 `https://api.github.com` |
 | `GITHUB_SOURCE_UPLOAD_BASE` / `GITHUB_TARGET_UPLOAD_BASE` / `GITHUB_UPLOAD_BASE` | — | GitHub 附件上传地址；默认 `https://uploads.github.com`（GHES 为 `/api/uploads`） |
+| `GITCODE_SOURCE_TOKEN` | — | 源仓库 GitCode 令牌，`GITCODE_TOKEN` 的源专用覆盖 |
+| `GITCODE_TARGET_TOKEN` | — | 目标仓库 GitCode 令牌，`GITCODE_TOKEN` 的目标专用覆盖 |
+| `GITCODE_TOKEN` | — | 源 / 目标共用的 GitCode 令牌 |
+| `GITCODE_SOURCE_API_BASE` / `GITCODE_TARGET_API_BASE` / `GITCODE_API_BASE` | — | GitCode API 地址覆盖；默认 `https://api.gitcode.com/api/v5` |
+| `GITLAB_SOURCE_TOKEN` | — | 源项目 GitLab 令牌，`GITLAB_TOKEN` 的源专用覆盖 |
+| `GITLAB_TARGET_TOKEN` | — | 目标项目 GitLab 令牌，`GITLAB_TOKEN` 的目标专用覆盖 |
+| `GITLAB_TOKEN` | — | 源 / 目标共用的 GitLab 令牌 |
+| `GITLAB_SOURCE_API_BASE` / `GITLAB_TARGET_API_BASE` / `GITLAB_API_BASE` | — | GitLab API 地址覆盖；默认 `https://gitlab.com/api/v4`，自建 GitLab 填自己的 `/api/v4` |
 
 示例（令牌只走环境变量，不进入命令行参数）：
 
@@ -1694,6 +1724,12 @@ CNB_SOURCE_TOKEN=... GITEE_TARGET_TOKEN=... \
 CNB_SOURCE_TOKEN=... GITHUB_TARGET_TOKEN=... \
   make release-sync RELEASE_SYNC_SOURCE=org/source \
     RELEASE_SYNC_TARGET=github.com/owner/repo RELEASE_SYNC_TAG=v1.0.0  # 同步到 GitHub
+CNB_SOURCE_TOKEN=... GITCODE_TARGET_TOKEN=... \
+  make release-sync RELEASE_SYNC_SOURCE=org/source \
+    RELEASE_SYNC_TARGET=gitcode.com/owner/repo RELEASE_SYNC_TAG=v1.0.0  # 同步到 GitCode
+CNB_SOURCE_TOKEN=... GITLAB_TARGET_TOKEN=... \
+  make release-sync RELEASE_SYNC_SOURCE=org/source \
+    RELEASE_SYNC_TARGET=gitlab.com/group/project RELEASE_SYNC_TAG=v1.0.0  # 同步到 GitLab
 make release-sync-help                           # release-sync 命令帮助
 HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-config \
   HARMONY_STORE_FILE=./storeFile.p12 HARMONY_CERTPATH=./certpath.cer \
@@ -1721,7 +1757,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`CNB_SOURCE_TOKEN`、`CNB_TARGET_TOKEN`、`CNB_TOKEN`、`CNB_SOURCE_API_BASE`、`CNB_TARGET_API_BASE`、`CNB_API_BASE`、`GITEE_SOURCE_TOKEN`、`GITEE_TARGET_TOKEN`、`GITEE_TOKEN`、`GITEE_SOURCE_API_BASE`、`GITEE_TARGET_API_BASE`、`GITEE_API_BASE`、`GITHUB_SOURCE_TOKEN`、`GITHUB_TARGET_TOKEN`、`GITHUB_TOKEN`、`GITHUB_SOURCE_API_BASE`、`GITHUB_TARGET_API_BASE`、`GITHUB_API_BASE`、`GITHUB_API_URL`、`GITHUB_SOURCE_UPLOAD_BASE`、`GITHUB_TARGET_UPLOAD_BASE`、`GITHUB_UPLOAD_BASE`、`RELEASE_SYNC_SOURCE_TOKEN`、`RELEASE_SYNC_TARGET_TOKEN`、`RELEASE_SYNC_SOURCE_API_BASE`、`RELEASE_SYNC_TARGET_API_BASE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`CNB_SOURCE_TOKEN`、`CNB_TARGET_TOKEN`、`CNB_TOKEN`、`CNB_SOURCE_API_BASE`、`CNB_TARGET_API_BASE`、`CNB_API_BASE`、`GITEE_SOURCE_TOKEN`、`GITEE_TARGET_TOKEN`、`GITEE_TOKEN`、`GITEE_SOURCE_API_BASE`、`GITEE_TARGET_API_BASE`、`GITEE_API_BASE`、`GITHUB_SOURCE_TOKEN`、`GITHUB_TARGET_TOKEN`、`GITHUB_TOKEN`、`GITHUB_SOURCE_API_BASE`、`GITHUB_TARGET_API_BASE`、`GITHUB_API_BASE`、`GITHUB_API_URL`、`GITHUB_SOURCE_UPLOAD_BASE`、`GITHUB_TARGET_UPLOAD_BASE`、`GITHUB_UPLOAD_BASE`、`GITCODE_SOURCE_TOKEN`、`GITCODE_TARGET_TOKEN`、`GITCODE_TOKEN`、`GITCODE_SOURCE_API_BASE`、`GITCODE_TARGET_API_BASE`、`GITCODE_API_BASE`、`GITLAB_SOURCE_TOKEN`、`GITLAB_TARGET_TOKEN`、`GITLAB_TOKEN`、`GITLAB_SOURCE_API_BASE`、`GITLAB_TARGET_API_BASE`、`GITLAB_API_BASE`、`RELEASE_SYNC_SOURCE_TOKEN`、`RELEASE_SYNC_TARGET_TOKEN`、`RELEASE_SYNC_SOURCE_API_BASE`、`RELEASE_SYNC_TARGET_API_BASE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -1770,6 +1806,36 @@ make pack-check                                  # 查看 npm 发布物内容（
   <https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/managing-your-personal-access-tokens>
 
 以上文档归 GitHub 所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
+
+### GitCode
+
+- GitCode OpenAPI v5 使用说明（鉴权、响应码）：
+  <https://docs.gitcode.com/docs/apis/>
+- 创建 / 更新 Release：
+  <https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-releases/>
+  <https://docs.gitcode.com/docs/apis/patch-api-v-5-repos-owner-repo-releases-tag/>
+- Release 附件上传地址 / 下载 / 删除：
+  <https://docs.gitcode.com/docs/apis/get-api-v-5-repos-owner-repo-releases-tag-upload-url/>
+  <https://docs.gitcode.com/docs/apis/get-api-v-5-repos-owner-repo-releases-attach-files-file-name-download/>
+  <https://docs.gitcode.com/docs/apis/delete-api-v-5-repos-owner-repo-releases-tag-attach-files-attach-file-id/>
+- Tag 列表 / 创建：
+  <https://docs.gitcode.com/docs/apis/get-api-v-5-repos-owner-repo-tags/>
+  <https://docs.gitcode.com/docs/apis/post-api-v-5-repos-owner-repo-tags/>
+
+以上文档归 GitCode 所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
+
+### GitLab
+
+- Project release API（发布创建 / 更新 / 查询）：
+  <https://docs.gitlab.com/api/releases/>
+- Release links API（发布链接；GitLab 没有任意附件上传）：
+  <https://docs.gitlab.com/api/releases/links/>
+- Tags API（标签查询 / 创建）：
+  <https://docs.gitlab.com/api/tags/>
+- 私人访问令牌：
+  <https://docs.gitlab.com/user/profile/personal_access_tokens/>
+
+以上文档归 GitLab 所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
 
 ### Gitee
 
