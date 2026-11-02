@@ -86,7 +86,7 @@ SHELL := /usr/bin/env bash
 #   AAB_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   AAB_ARGS      追加到 aab 命令末尾的额外参数，例如 AAB_ARGS="--verbose"
 #
-# Git 发布同步可选变量（release-sync，目前支持 CNB / Gitee / GitHub / GitCode / GitLab）：
+# Git 发布同步可选变量（release-sync，目前支持 CNB / Gitee / GitHub / GitCode / GitLab / GitLink）：
 #   RELEASE_SYNC_SOURCE / RELEASE_SYNC_TARGET
 #                     源 / 目标仓库，等价于 --source / --target（必填）
 #   RELEASE_SYNC_TAG  发布标签，等价于 --tag；不给时同步最新发布
@@ -105,6 +105,8 @@ SHELL := /usr/bin/env bash
 #     GITCODE_SOURCE_API_BASE / GITCODE_TARGET_API_BASE / GITCODE_API_BASE
 #     GITLAB_SOURCE_TOKEN / GITLAB_TARGET_TOKEN / GITLAB_TOKEN
 #     GITLAB_SOURCE_API_BASE / GITLAB_TARGET_API_BASE / GITLAB_API_BASE
+#     GITLINK_SOURCE_TOKEN / GITLINK_TARGET_TOKEN / GITLINK_TOKEN
+#     GITLINK_SOURCE_API_BASE / GITLINK_TARGET_API_BASE / GITLINK_API_BASE
 #   也认 RELEASE_SYNC_SOURCE_TOKEN / RELEASE_SYNC_TARGET_TOKEN 等命令自己的变量。
 #
 # 鸿蒙签名配置可选变量（与命令读取的 HARMONY_* 环境变量同名）：
@@ -416,7 +418,7 @@ aab: ## 查看 AAB 安装包信息（AAB_FILE 必填；AAB_VERBOSE 输出全部�
 release-sync-help: ## 同步 Git 发布帮助文档
 	node src/publish-apk.js release-sync --help
 
-release-sync: ## 同步 Git 发布（RELEASE_SYNC_SOURCE / RELEASE_SYNC_TARGET 必填；令牌用 CNB_* / GITEE_* / GITHUB_* / GITCODE_* / GITLAB_* 环境变量；RELEASE_SYNC_ARGS 传 --tag / --dry-run 等）
+release-sync: ## 同步 Git 发布（RELEASE_SYNC_SOURCE / RELEASE_SYNC_TARGET 必填；令牌用 CNB_* / GITEE_* / GITHUB_* / GITCODE_* / GITLAB_* / GITLINK_* 环境变量；RELEASE_SYNC_ARGS 传 --tag / --dry-run 等）
 	@node src/publish-apk.js release-sync $(RELEASE_SYNC_OPTIONS) $(RELEASE_SYNC_ARGS)
 
 # ------------------------------------------------------- Android keystore

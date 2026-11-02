@@ -28,7 +28,7 @@
  *    可选：getDefaultBranch() -> string，未显式给 --target-branch 时用于创建目标标签。
  *
  * 以后接其它平台（Gitee / GitHub 已实现）：
- *   1. 照 src/cnb.js / src/gitee.js / src/github-release.js / src/gitcode.js / src/gitlab.js 的形状新增适配器；
+ *   1. 照 src/cnb.js / src/gitee.js / src/github-release.js / src/gitcode.js / src/gitlab.js / src/gitlink.js 的形状新增适配器；
  *   2. 在下面的 PROVIDERS 里追加一行；
  *   3. 仓库地址解析会按 host 自动选择适配器，编排逻辑不用改。
  *     （现有三个适配器覆盖了发布字段、标签、附件上传 / 表格回退与 digest 校验。）
@@ -61,6 +61,7 @@ import { cnbReleaseProvider } from './cnb.js'
 import { giteeReleaseProvider } from './gitee.js'
 import { gitcodeReleaseProvider } from './gitcode.js'
 import { gitlabReleaseProvider } from './gitlab.js'
+import { gitlinkReleaseProvider } from './gitlink.js'
 import { githubReleaseProvider } from './github-release.js'
 import { renderHelp } from './help.js'
 
@@ -132,6 +133,7 @@ const PROVIDERS = [
   githubReleaseProvider,
   gitcodeReleaseProvider,
   gitlabReleaseProvider,
+  gitlinkReleaseProvider,
 ]
 
 /** 省略 host 时按 CNB 处理（Gitee 地址请写清 host） */
@@ -146,8 +148,6 @@ const DEFAULT_PROVIDER = cnbReleaseProvider
 const UNSUPPORTED_HOSTS = new Set([
   'bitbucket.org',
   'www.bitbucket.org',
-  'gitlink.org.cn',
-  'www.gitlink.org.cn',
 ])
 
 // ------------------------------------------------------------------ 仓库解析
@@ -204,7 +204,7 @@ function normalizeRepoPath(segments, stripGit = true) {
  *   https://cnb.cool/org/repo(.git)
  *   cnb.cool/org/repo
  *   git@cnb.cool:org/repo.git
- *   org/repo（省略 host，按 CNB 处理；Gitee / GitHub / GitCode / GitLab 请写清 host）
+ *   org/repo（省略 host，按 CNB 处理；Gitee / GitHub / GitCode / GitLab / GitLink 请写清 host）
  *
  * 裸地址的歧义处理：
  *   - 第一段恰好是已实现的平台域名 → 平台 + 后面的路径；
@@ -399,7 +399,7 @@ function renderReleaseSyncHelp() {
         entries: [
           [
             `${OPTION_SOURCE} <仓库>`,
-            `源仓库（提供发布与附件），必填。支持 https://cnb.cool/org/repo、https://gitee.com/owner/repo、https://github.com/owner/repo、https://gitcode.com/owner/repo、https://gitlab.com/group/project、cnb.cool/org/repo、git@cnb.cool:org/repo.git 或 org/repo；可用 ${ENV_SOURCE} 补齐`,
+            `源仓库（提供发布与附件），必填。支持 https://cnb.cool/org/repo、https://gitee.com/owner/repo、https://github.com/owner/repo、https://gitcode.com/owner/repo、https://gitlab.com/group/project、https://gitlink.org.cn/owner/repo、cnb.cool/org/repo、git@cnb.cool:org/repo.git 或 org/repo；可用 ${ENV_SOURCE} 补齐`,
           ],
           [
             `${OPTION_TARGET} <仓库>`,
@@ -415,7 +415,7 @@ function renderReleaseSyncHelp() {
           ],
           [
             `${OPTION_TARGET_BRANCH} <分支>`,
-            `目标标签不存在时基于哪个分支创建；未指定时优先用目标仓库默认分支（Gitee / GitHub / GitCode / GitLab 可查询），否则 ${DEFAULT_TARGET_BRANCH}；可用 ${ENV_TARGET_BRANCH} 补齐`,
+            `目标标签不存在时基于哪个分支创建；未指定时优先用目标仓库默认分支（Gitee / GitHub / GitCode / GitLab / GitLink 可查询），否则 ${DEFAULT_TARGET_BRANCH}；可用 ${ENV_TARGET_BRANCH} 补齐`,
           ],
           [
             `${OPTION_SOURCE_TOKEN} <令牌>`,
@@ -427,11 +427,11 @@ function renderReleaseSyncHelp() {
           ],
           [
             `${OPTION_SOURCE_API_BASE} <地址>`,
-            `源平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5 / GitHub https://api.github.com / GitCode https://api.gitcode.com/api/v5 / GitLab https://gitlab.com/api/v4（本地联调 / 代理时覆盖）`,
+            `源平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5 / GitHub https://api.github.com / GitCode https://api.gitcode.com/api/v5 / GitLab https://gitlab.com/api/v4 / GitLink https://www.gitlink.org.cn/api（本地联调 / 代理时覆盖）`,
           ],
           [
             `${OPTION_TARGET_API_BASE} <地址>`,
-            `目标平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5 / GitHub https://api.github.com / GitCode https://api.gitcode.com/api/v5 / GitLab https://gitlab.com/api/v4（本地联调 / 代理时覆盖）`,
+            `目标平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5 / GitHub https://api.github.com / GitCode https://api.gitcode.com/api/v5 / GitLab https://gitlab.com/api/v4 / GitLink https://www.gitlink.org.cn/api（本地联调 / 代理时覆盖）`,
           ],
           [OPTION_DRY_RUN, '只读取源发布与目标状态并打印计划，不创建标签 / 发布、不上传或删除附件'],
           [OPTION_VERBOSE, `输出详细日志（含接口地址、发布 ID、校验结果）；也可用 ${ENV_VERBOSE}`],
@@ -447,11 +447,11 @@ function renderReleaseSyncHelp() {
           [ENV_TARGET_BRANCH, `目标标签的起始分支，等价于 ${OPTION_TARGET_BRANCH}；未设置时优先用目标仓库默认分支，否则 ${DEFAULT_TARGET_BRANCH}`],
           [
             ENV_SOURCE_TOKEN,
-            `源仓库令牌；未设置时按平台读 CNB_SOURCE_TOKEN / CNB_TOKEN、GITEE_SOURCE_TOKEN / GITEE_TOKEN、GITHUB_SOURCE_TOKEN / GITHUB_TOKEN、GITCODE_SOURCE_TOKEN / GITCODE_TOKEN 或 GITLAB_SOURCE_TOKEN / GITLAB_TOKEN`,
+            `源仓库令牌；未设置时按平台读 CNB_SOURCE_TOKEN / CNB_TOKEN、GITEE_SOURCE_TOKEN / GITEE_TOKEN、GITHUB_SOURCE_TOKEN / GITHUB_TOKEN、GITCODE_SOURCE_TOKEN / GITCODE_TOKEN 、GITLAB_SOURCE_TOKEN / GITLAB_TOKEN 或 GITLINK_SOURCE_TOKEN / GITLINK_TOKEN`,
           ],
           [
             ENV_TARGET_TOKEN,
-            `目标仓库令牌；未设置时按平台读 CNB_TARGET_TOKEN / CNB_TOKEN、GITEE_TARGET_TOKEN / GITEE_TOKEN、GITHUB_TARGET_TOKEN / GITHUB_TOKEN、GITCODE_TARGET_TOKEN / GITCODE_TOKEN 或 GITLAB_TARGET_TOKEN / GITLAB_TOKEN`,
+            `目标仓库令牌；未设置时按平台读 CNB_TARGET_TOKEN / CNB_TOKEN、GITEE_TARGET_TOKEN / GITEE_TOKEN、GITHUB_TARGET_TOKEN / GITHUB_TOKEN、GITCODE_TARGET_TOKEN / GITCODE_TOKEN 、GITLAB_TARGET_TOKEN / GITLAB_TOKEN 或 GITLINK_TARGET_TOKEN / GITLINK_TOKEN`,
           ],
           [ENV_SOURCE_API_BASE, `源平台 API 地址，等价于 ${OPTION_SOURCE_API_BASE}`],
           [ENV_TARGET_API_BASE, `目标平台 API 地址，等价于 ${OPTION_TARGET_API_BASE}`],
@@ -467,6 +467,8 @@ function renderReleaseSyncHelp() {
           ['GITCODE_SOURCE_API_BASE / GITCODE_TARGET_API_BASE / GITCODE_API_BASE', 'GitCode API 地址；默认 https://api.gitcode.com/api/v5'],
           ['GITLAB_SOURCE_TOKEN / GITLAB_TARGET_TOKEN / GITLAB_TOKEN', 'GitLab 私人访问令牌；源与目标可用同一个 GITLAB_TOKEN'],
           ['GITLAB_SOURCE_API_BASE / GITLAB_TARGET_API_BASE / GITLAB_API_BASE', 'GitLab API 地址；默认 https://gitlab.com/api/v4'],
+          ['GITLINK_SOURCE_TOKEN / GITLINK_TARGET_TOKEN / GITLINK_TOKEN', 'GitLink 访问令牌；源与目标可用同一个 GITLINK_TOKEN'],
+          ['GITLINK_SOURCE_API_BASE / GITLINK_TARGET_API_BASE / GITLINK_API_BASE', 'GitLink API 地址；默认 https://www.gitlink.org.cn/api'],
         ],
       },
       {
@@ -477,6 +479,7 @@ function renderReleaseSyncHelp() {
           ['https://github.com/owner/repo', 'GitHub 仓库地址；也可写 github.com/owner/repo'],
           ['https://gitcode.com/owner/repo', 'GitCode 仓库地址；也可写 gitcode.com/owner/repo'],
           ['https://gitlab.com/group/project', 'GitLab 项目地址；支持 group/subgroup/project 多级命名空间'],
+          ['https://gitlink.org.cn/owner/repo', 'GitLink 仓库地址；也可写 gitlink.org.cn/owner/repo'],
           ['cnb.cool/org/repo', '省略协议'],
           ['git@cnb.cool:org/repo.git', 'SCP 风格 SSH 地址'],
           ['org/repo', `省略 host 时按 ${DEFAULT_PROVIDER.label} 处理（组织名可带点，如 xuxiaowei.io/repo）；Gitee / GitHub 请写清 host`],
@@ -496,6 +499,7 @@ function renderReleaseSyncHelp() {
           ['GitHub 附件', '正常下载 / 上传；asset digest 用于 SHA 跳过或替换；上传返回 404 时按同名 + 大小 + sha256 核对是否已落盘'],
           ['GitCode 附件', '正常下载 / 上传；先取 upload_url 再 PUT；digest 用于 SHA 跳过或替换，同名先删后传'],
           ['GitLab 附件', 'Release 原生只有 links/sources，不能上传文件；目标为 GitLab 时直接生成 Markdown 下载表格'],
+          ['GitLink 附件', '正常下载 / 上传；先 POST /attachments.json 拿附件 ID，再用 attachment_ids 关联发布'],
         ],
       },
       {
@@ -507,6 +511,7 @@ function renderReleaseSyncHelp() {
           ['GitHub 令牌', 'Contents 读写（fine-grained Contents: Read and write / classic repo）；源只需读'],
           ['GitCode 令牌', '仓库 / 发布读写权限；源只需读'],
           ['GitLab 令牌', 'api / write_repository 权限；源只需读'],
+          ['GitLink 令牌', '仓库 / 发布写权限；源只需读'],
         ],
       },
       {
@@ -532,7 +537,8 @@ function renderReleaseSyncHelp() {
           ['GitHub（github.com）', '已实现发布、标签、附件上传 / 下载；GitHub Enterprise 可通过 API / 上传地址覆盖'],
           ['GitCode（gitcode.com）', '已实现发布、标签、附件上传 / 下载；附件先取 upload_url 再 PUT'],
           ['GitLab（gitlab.com / 自建）', '已实现发布、标签、Release Links；目标为 GitLab 时直接生成 Markdown 下载表格'],
-          ['其它平台', '适配器接口已预留，后续按 src/cnb.js / src/gitee.js / src/github-release.js / src/gitcode.js / src/gitlab.js 的形状加入'],
+          ['GitLink（gitlink.org.cn）', '已实现发布、标签、附件上传 / 下载；附件经 /attachments.json 上传后关联发布'],
+          ['其它平台', '适配器接口已预留，后续按现有适配器的形状加入'],
         ],
       },
     ],
@@ -547,6 +553,7 @@ function renderReleaseSyncHelp() {
       `  ${PROGRAM} ${COMMAND_NAME} --source org/source --target github.com/owner/repo --tag v1.0.0`,
       `  ${PROGRAM} ${COMMAND_NAME} --source org/source --target gitcode.com/owner/repo --tag v1.0.0`,
       `  ${PROGRAM} ${COMMAND_NAME} --source org/source --target gitlab.com/group/project --tag v1.0.0`,
+      `  ${PROGRAM} ${COMMAND_NAME} --source org/source --target gitlink.org.cn/owner/repo --tag v1.0.0`,
       '',
       '说明:',
       `  - ${OPTION_TAG} 与 ${OPTION_LATEST} 不能同时使用；都不给时同步最新发布。`,
@@ -776,7 +783,7 @@ function sha256Cell(asset) {
 }
 
 /** 生成 Markdown 下载表格；文件下载地址来自源发布附件 */
-function renderAssetTable(assets, { sourceLabel, targetLabel } = {}) {
+function renderAssetTable(assets, { sourceLabel, targetLabel, targetNote } = {}) {
   const sourceText =
     typeof sourceLabel === 'string' && sourceLabel !== '' ? `（源仓库 ${sourceLabel}）` : ''
   const rows = assets.map((asset) => {
@@ -789,7 +796,9 @@ function renderAssetTable(assets, { sourceLabel, targetLabel } = {}) {
     ASSET_TABLE_START,
     '## 发布产物',
     '',
-    `> ${typeof targetLabel === 'string' && targetLabel !== '' ? `目标平台 ${targetLabel}` : '目标平台'} 不支持上传发布附件${sourceText}，以下文件请从源仓库下载。`,
+    typeof targetNote === 'string' && targetNote !== ''
+      ? `> ${targetNote}${sourceText}`
+      : `> ${typeof targetLabel === 'string' && targetLabel !== '' ? `目标平台 ${targetLabel}` : '目标平台'} 不支持上传发布附件${sourceText}，以下文件请从源仓库下载。`,
     '',
     '| 文件 | 大小 | SHA-256 | 下载 |',
     '| --- | ---: | --- | --- |',
@@ -802,12 +811,12 @@ function renderAssetTable(assets, { sourceLabel, targetLabel } = {}) {
  * 把附件下载表格追加到发布说明；已有旧表格时先移除，保证重复执行不重复追加。
  * 不传附件时返回移除旧表格后的发布说明。
  */
-export function appendAssetTable(body, assets, { sourceLabel, targetLabel } = {}) {
+export function appendAssetTable(body, assets, { sourceLabel, targetLabel, targetNote } = {}) {
   const cleaned = stripAssetTable(body)
   if (!Array.isArray(assets) || assets.length === 0) {
     return cleaned
   }
-  const table = renderAssetTable(assets, { sourceLabel, targetLabel })
+  const table = renderAssetTable(assets, { sourceLabel, targetLabel, targetNote })
   return cleaned === '' ? table : `${cleaned}\n\n${table}`
 }
 
@@ -843,7 +852,7 @@ function renderSummary({
     lines.push(
       dryRun
         ? `附件: ${decisions.length} 个（目标平台将生成 Markdown 下载表格）`
-        : `附件: ${decisions.length} 个（目标平台不支持附件上传，已写入发布说明的 Markdown 下载表格）`,
+        : `附件: ${decisions.length} 个（目标平台使用 Markdown 下载表格，已写入发布说明）`,
     )
     for (const decision of decisions) {
       lines.push(`- ${decision.asset.name}（${formatSize(decision.asset.size)}，下载地址见发布说明）`)
@@ -1193,6 +1202,7 @@ async function runReleaseSync(argv, env) {
     releaseFields.body = appendAssetTable(sourceBody, sourceAssets, {
       sourceLabel: source.display,
       targetLabel: target.provider.label,
+      targetNote: target.provider.assetTableNote,
     })
   }
 

@@ -351,7 +351,7 @@ const TOKENS = {
     const result = await runCli(ARGS(mock.base), TOKENS)
     assert.equal(result.code, 0, result.stderr)
     assert.match(result.stderr, /跳过附件下载/)
-    assert.match(result.stdout, /目标平台不支持附件上传/)
+    assert.match(result.stdout, /目标平台使用 Markdown 下载表格/)
     assert.match(result.stdout, /app\.apk（5 B，下载地址见发布说明）/)
 
     // 目标标签基于 Gitee 仓库默认分支 master 创建
@@ -407,7 +407,7 @@ const TOKENS = {
     assert.equal(mock.releasePatched.length, 1)
     assert.match(mock.releasePatched[0].body, /^## 源发布说明/)
     assert.match(mock.releasePatched[0].body, /<!-- release-sync:assets:start -->/)
-    assert.match(result.stdout, /目标平台不支持附件上传/)
+    assert.match(result.stdout, /目标平台使用 Markdown 下载表格/)
     assert.equal(
       mock.requests.filter((item) => item.path.includes('/releases/download/')).length,
       0,

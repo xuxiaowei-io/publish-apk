@@ -51,6 +51,8 @@ jobs:
           node tests/release-sync-gitcode-source.test.js
           node tests/release-sync-gitlab.test.js
           node tests/release-sync-gitlab-source.test.js
+          node tests/release-sync-gitlink.test.js
+          node tests/release-sync-gitlink-source.test.js
 
       - name: Smoke test CLI
         run: |

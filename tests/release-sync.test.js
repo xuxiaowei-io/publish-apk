@@ -937,6 +937,7 @@ const TOKEN_ENV = {
   )
   assert.equal(parseRepositoryValue('org/repo').display, 'cnb.cool/org/repo')
   assert.equal(parseRepositoryValue('https://gitlab.com/group/sub/project').repo, 'group/sub/project')
+  assert.equal(parseRepositoryValue('https://gitlink.org.cn/owner/repo').display, 'gitlink.org.cn/owner/repo')
   assert.throws(() => parseRepositoryValue('bitbucket.org/owner/repo'), /暂不支持 bitbucket\.org/)
   assert.throws(() => parseRepositoryValue('https://bitbucket.org/owner/repo'), /暂不支持 bitbucket\.org/)
   assert.throws(() => parseRepositoryValue('onlyone'), /组织\/仓库/)
