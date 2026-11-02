@@ -5,6 +5,8 @@
 另提供一组与厂商无关的本地命令：`cert`（证书 / PKCS#12 密钥库）、`profile`（P7B Provisioning Profile）、
 `keystore`（校验 Android 签名密钥库的口令 / 别名，BASE64 可落盘）、`keystore-env`（导出 CI 变量）、
 `keystore-config`（由 BASE64 / 变量生成 `keystore.properties`）与 `keystore-gen`（快速生成密钥库）。
+Git 发布同步用 `release-sync`：把一个仓库的 Release（发布说明 + 附件）同步到另一个仓库，
+目标标签不存在时按分支创建、目标多余附件按源清理；目前支持 CNB（cnb.cool），并已为 Gitee / GitHub 预留适配器接口。
 华为侧另有 `huawei signing-config`，用 `.cer` / `.p7b` / `.p12` 与明文口令生成 `build-profile.json5` 的签名配置。
 
 - 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`，
@@ -80,6 +82,8 @@ publish-apk apk --file ./app-arm64-v8a-release.apk        # 查看 APK 安装包
 publish-apk aab --file ./app-release.aab                  # 查看 AAB 安装包信息
 publish-apk apk --file ./*.apk                             # 一次查看多个 APK
 publish-apk aab --file ./*.aab                             # 一次查看多个 AAB
+publish-apk release-sync --source https://cnb.cool/org/source \
+  --target https://cnb.cool/org/target --tag v1.0.0         # 同步 CNB 发布（说明 + 附件 + 目标标签）
 ```
 
 `huawei` 子命令（华为应用市场 / AppGallery Connect）：
@@ -504,6 +508,92 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 - AAB 解析只使用 Node 内置能力（ZIP 中央目录 + `node:zlib` + 自带 protobuf 解析），
   不依赖 JDK、`openssl`、`bundletool` 或 npm 第三方包。
 - 不输出证书 PEM 原文；AAB 里没有私钥。
+
+### release-sync（同步 Git 发布）
+
+把一个仓库的 Release（**源**）同步到另一个仓库的 Release（**目标**）。
+目前实现 **CNB（cnb.cool）→ CNB**；平台适配器接口已按「以后接 Gitee / GitHub」的形状预留，见本节末尾。
+
+同步内容包括：
+
+- **发布字段**：标题（`name`）、发布说明（`body`）、草稿（`draft`）、预发布（`prerelease`）、是否最新（`is_latest`）；
+- **发布产物**：源 Release 的全部附件，逐个下载后上传到目标 Release；
+  同名附件按 SHA 判断，一致跳过、不一致覆盖；目标上源没有的附件在最后删除；
+- **目标标签**：目标仓库没有该标签时，基于 `--target-branch` 指定的分支创建；
+  已存在时不移动，避免改写目标仓库历史（源 / 目标可能没有相同的提交历史）。
+
+同步以源为准：同名附件先比 SHA（一致跳过、不一致覆盖），目标上源没有的附件会删除；
+目标多出的**发布**本身不删除。重复执行结果一致，适合放在发布流水线里重试。
+
+```bash
+# 同步指定标签：发布说明 + 全部附件 + 目标标签
+publish-apk release-sync \
+  --source https://cnb.cool/org/source \
+  --target https://cnb.cool/org/target \
+  --tag v1.0.0
+
+# 不传 --tag 时同步最新发布
+publish-apk release-sync --source org/source --target org/target
+
+# 目标标签不存在时基于 release/1.0 分支创建
+publish-apk release-sync --source org/source --target org/target \
+  --tag v1.0.0 --target-branch release/1.0
+
+# 只读取并打印计划，不写入目标（不建标签 / 发布，也不上传 / 删除附件）
+publish-apk release-sync --source org/source --target org/target --tag v1.0.0 --dry-run
+
+# 令牌只走环境变量，避免进入 ps / shell 历史
+CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
+  publish-apk release-sync --source org/source --target org/target --tag v1.0.0
+```
+
+| 选项 | 环境变量 | 说明 |
+| --- | --- | --- |
+| `--source <仓库>` | `RELEASE_SYNC_SOURCE` | 源仓库（提供发布与附件），**必填** |
+| `--target <仓库>` | `RELEASE_SYNC_TARGET` | 目标仓库（接收发布与附件），**必填** |
+| `--tag <标签>` | `RELEASE_SYNC_TAG` | 要同步的发布标签；不给时同步最新发布 |
+| `--latest` | — | 明确同步最新发布；与 `--tag` 互斥，两者都不给时默认最新 |
+| `--target-branch <分支>` | `RELEASE_SYNC_TARGET_BRANCH` | 目标标签不存在时基于哪个分支创建，默认 `main` |
+| `--source-token <令牌>` | `RELEASE_SYNC_SOURCE_TOKEN` / `CNB_SOURCE_TOKEN` / `CNB_TOKEN` | 源仓库令牌（只读即可） |
+| `--target-token <令牌>` | `RELEASE_SYNC_TARGET_TOKEN` / `CNB_TARGET_TOKEN` / `CNB_TOKEN` | 目标仓库令牌（需要写权限） |
+| `--source-api-base <地址>` | `RELEASE_SYNC_SOURCE_API_BASE` / `CNB_SOURCE_API_BASE` / `CNB_API_BASE` | 源平台 API 地址，默认 `https://api.cnb.cool` |
+| `--target-api-base <地址>` | `RELEASE_SYNC_TARGET_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` | 目标平台 API 地址，默认 `https://api.cnb.cool` |
+| `--dry-run` | — | 只读取源发布与目标状态并打印计划（含待删除的附件），不产生写请求 |
+| `--verbose` | `RELEASE_SYNC_VERBOSE` | 输出详细日志（接口地址、发布 ID、hash 校验结果等） |
+
+**仓库写法**（`--source` / `--target` 相同）：
+
+| 写法 | 说明 |
+| --- | --- |
+| `https://cnb.cool/org/repo` | 完整网页地址，可带 `.git` 后缀 |
+| `cnb.cool/org/repo` | 省略协议 |
+| `git@cnb.cool:org/repo.git` | SCP 风格 SSH 地址 |
+| `org/repo` | 省略 host 时按当前唯一实现的 CNB 处理；组织名可带点，如 `xuxiaowei.io/repo` |
+
+**CNB 权限与目标标签**：
+
+| 角色 | 访问令牌权限 | 说明 |
+| --- | --- | --- |
+| 源仓库 | `repo-release:r` | 查询发布、下载附件 |
+| 目标仓库 | `repo-release:rw` | 创建标签、创建 / 更新发布、上传 / 确认 / 删除附件 |
+
+- 目标标签不存在时调用 `POST /{repo}/-/git/tags`，`target` 取 `--target-branch`，创建**轻量标签**；
+  然后创建目标发布（`target_commitish` 同样取该分支）。
+- 目标标签已存在时不会移动它；如需换起点，请先在目标仓库删除该标签再重跑。
+- 目标发布已存在时更新标题 / 说明 / 草稿 / 预发布 / 最新状态；附件按文件名匹配：
+  两端 hash（`hash_algo` + `hash_value`）一致且大小不冲突时跳过，否则覆盖上传。
+- 目标有、源没有的附件会在源附件同步完成后删除（按文件名判断）；源响应缺少附件列表时
+  跳过删除，避免误删。删除失败会报错，重跑会继续清理。
+- 附件先下载到系统临时目录（流式写盘，可选校验 hash / 大小），再流式 PUT 到预签名上传地址；
+  预签名上传**不会**携带 CNB 令牌。结束后自动清理临时文件。
+- 目标平台返回的“是否最新”会按源发布同步；同步旧版本时也不会意外把旧版本设成最新。
+
+**输出**：`stdout` 是同步摘要（源 / 目标发布、目标标签、附件上传 / 跳过 / 删除逐项状态），`stderr` 是过程日志与错误；
+令牌不会出现在任何输出里。`--dry-run` 的摘要以 `[dry-run]` 开头。
+
+**平台扩展**：`src/release-sync.js` 只做编排，平台能力由适配器提供；第一个适配器是
+[src/cnb.js](src/cnb.js)。接 Gitee / GitHub 时照它的形状新增适配器并注册到 `PROVIDERS` 即可，
+命令、选项与摘要格式不需要改。
 
 ### huawei 子命令
 
@@ -1411,6 +1501,39 @@ publish-apk huawei service-account-upload-url
 | `GITHUB_REPOSITORY` | `--github-repo` | `owner/repo`；Actions 自动注入；未给 `--github-repo` 时用它 |
 | `GITHUB_API_URL` | — | API 地址，默认 `https://api.github.com`；GitHub Enterprise 用 `https://host/api/v3` |
 
+### Git 发布同步（`RELEASE_SYNC_*` / `CNB_*`）
+
+只用于 `release-sync`；不会影响其它命令。带值的选项都有环境变量兜底，**命令行选项优先**；
+源与目标的令牌 / API 地址可以分开给，也可以用 `CNB_TOKEN` / `CNB_API_BASE` 让两者共用。
+
+| 环境变量 | 等价选项 | 说明 |
+| --- | --- | --- |
+| `RELEASE_SYNC_SOURCE` | `--source` | 源仓库，**必填** |
+| `RELEASE_SYNC_TARGET` | `--target` | 目标仓库，**必填** |
+| `RELEASE_SYNC_TAG` | `--tag` | 发布标签；不给时同步最新发布 |
+| `RELEASE_SYNC_TARGET_BRANCH` | `--target-branch` | 目标标签不存在时的起始分支，默认 `main` |
+| `RELEASE_SYNC_SOURCE_TOKEN` | `--source-token` | 源仓库令牌；未设置时依次读 `CNB_SOURCE_TOKEN`、`CNB_TOKEN` |
+| `RELEASE_SYNC_TARGET_TOKEN` | `--target-token` | 目标仓库令牌；未设置时依次读 `CNB_TARGET_TOKEN`、`CNB_TOKEN` |
+| `RELEASE_SYNC_SOURCE_API_BASE` | `--source-api-base` | 源平台 API 地址；未设置时依次读 `CNB_SOURCE_API_BASE`、`CNB_API_BASE`、默认 `https://api.cnb.cool` |
+| `RELEASE_SYNC_TARGET_API_BASE` | `--target-api-base` | 目标平台 API 地址；未设置时依次读 `CNB_TARGET_API_BASE`、`CNB_API_BASE`、默认 `https://api.cnb.cool` |
+| `RELEASE_SYNC_VERBOSE` | `--verbose` | 输出详细日志：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
+| `CNB_SOURCE_TOKEN` | — | 源仓库 CNB 访问令牌（`repo-release:r`），`CNB_TOKEN` 的源专用覆盖 |
+| `CNB_TARGET_TOKEN` | — | 目标仓库 CNB 访问令牌（`repo-release:rw`），`CNB_TOKEN` 的目标专用覆盖 |
+| `CNB_TOKEN` | — | 源 / 目标共用的 CNB 访问令牌；需要同时能读源、写目标 |
+| `CNB_SOURCE_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` | — | CNB API 地址覆盖；`CNB_API_BASE` 对源与目标都生效 |
+
+示例（令牌只走环境变量，不进入命令行参数）：
+
+```bash
+export CNB_SOURCE_TOKEN=<源仓库令牌>
+export CNB_TARGET_TOKEN=<目标仓库令牌>
+export RELEASE_SYNC_SOURCE=org/source
+export RELEASE_SYNC_TARGET=org/target
+export RELEASE_SYNC_TAG=v1.0.0
+
+publish-apk release-sync
+```
+
 ### Google Play（`GOOGLE_*`）
 
 | 环境变量 | 等价选项 | 说明 |
@@ -1513,6 +1636,9 @@ make apk APK_FILE=./app-arm64-v8a-release.apk    # 查看 APK 安装包信息
 make apk-help                                    # apk 命令帮助
 make aab AAB_FILE=./app-release.aab              # 查看 AAB 安装包信息
 make aab-help                                    # aab 命令帮助
+make release-sync RELEASE_SYNC_SOURCE=org/source RELEASE_SYNC_TARGET=org/target \
+  RELEASE_SYNC_TAG=v1.0.0                        # 同步 CNB 发布（令牌用 CNB_* 环境变量）
+make release-sync-help                           # release-sync 命令帮助
 HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-config \
   HARMONY_STORE_FILE=./storeFile.p12 HARMONY_CERTPATH=./certpath.cer \
   HARMONY_PROFILE=./profile.p7b HARMONY_SIGNING_NAME=default HARMONY_ARGS="--write"
@@ -1539,7 +1665,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`CNB_SOURCE_TOKEN`、`CNB_TARGET_TOKEN`、`CNB_TOKEN`、`CNB_SOURCE_API_BASE`、`CNB_TARGET_API_BASE`、`CNB_API_BASE`、`RELEASE_SYNC_SOURCE_TOKEN`、`RELEASE_SYNC_TARGET_TOKEN`、`RELEASE_SYNC_SOURCE_API_BASE`、`RELEASE_SYNC_TARGET_API_BASE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -1564,6 +1690,19 @@ make pack-check                                  # 查看 npm 发布物内容（
 
 - PKCS #7 / CMS SignedData（`profile` 命令解析的 P7B 结构）：
   <https://datatracker.ietf.org/doc/html/rfc5652>
+
+### CNB
+
+- Open API 介绍（服务地址、鉴权头格式、调用示例）：
+  <https://docs.cnb.cool/zh/develops/openapi.html>
+- Open API 文档（Swagger UI）与 JSON：
+  <https://api.cnb.cool>、<https://api.cnb.cool/swagger.json>
+- 访问令牌（`Authorization: Bearer <token>` 的令牌来源与权限）：
+  <https://docs.cnb.cool/zh/guide/access-token.html>
+- `git:release` 内置任务（按 Tag 创建 / 更新仓库 Release 的参数与行为）：
+  <https://docs.cnb.cool/zh/build/internal-steps/git/release.html>
+
+以上文档归 CNB 所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
 
 ### 华为
 

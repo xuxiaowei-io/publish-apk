@@ -37,11 +37,12 @@ jobs:
       - name: Check syntax
         run: for file in src/*.js tests/*.js tests/*.mjs; do node --check "$file"; done
 
-      - name: Test sealed box and GitHub client
+      - name: Test sealed box, GitHub client and release sync
         run: |
           node tests/sealed-box.test.js
           node tests/github.test.js
           node tests/keystore-config.test.js
+          node tests/release-sync.test.js
 
       - name: Smoke test CLI
         run: |
@@ -52,6 +53,7 @@ jobs:
           node src/publish-apk.js app --help > /dev/null
           node src/publish-apk.js apk --help > /dev/null
           node src/publish-apk.js aab --help > /dev/null
+          node src/publish-apk.js release-sync --help > /dev/null
           node src/publish-apk.js keystore-env --help > /dev/null
           node src/publish-apk.js keystore-config --help > /dev/null
           node src/publish-apk.js keystore-gen --help > /dev/null

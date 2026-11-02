@@ -86,6 +86,18 @@ SHELL := /usr/bin/env bash
 #   AAB_VERBOSE   等价于 --verbose：1/true/yes/on 输出全部字段，0/false/no/off 关闭
 #   AAB_ARGS      追加到 aab 命令末尾的额外参数，例如 AAB_ARGS="--verbose"
 #
+# Git 发布同步可选变量（release-sync，目前支持 CNB）：
+#   RELEASE_SYNC_SOURCE / RELEASE_SYNC_TARGET
+#                     源 / 目标仓库，等价于 --source / --target（必填）
+#   RELEASE_SYNC_TAG  发布标签，等价于 --tag；不给时同步最新发布
+#   RELEASE_SYNC_TARGET_BRANCH
+#                     目标标签不存在时基于哪个分支创建，等价于 --target-branch，默认 main
+#   RELEASE_SYNC_ARGS 追加到 release-sync 命令末尾的额外参数，例如 RELEASE_SYNC_ARGS="--dry-run --verbose"
+#   令牌与 API 地址只走环境变量（不转发，避免进 ps / CI 日志）：
+#     CNB_SOURCE_TOKEN / CNB_TARGET_TOKEN / CNB_TOKEN
+#     CNB_SOURCE_API_BASE / CNB_TARGET_API_BASE / CNB_API_BASE
+#   也认 RELEASE_SYNC_SOURCE_TOKEN / RELEASE_SYNC_TARGET_TOKEN 等命令自己的变量。
+#
 # 鸿蒙签名配置可选变量（与命令读取的 HARMONY_* 环境变量同名）：
 #   HARMONY_STORE_FILE / HARMONY_PROFILE
 #                     p12 / p7b 路径；两者也接受 BASE64，等价于 --store-file / --profile
@@ -183,6 +195,11 @@ APK_ARGS ?=
 AAB_FILE ?=
 AAB_VERBOSE ?=
 AAB_ARGS ?=
+RELEASE_SYNC_SOURCE ?=
+RELEASE_SYNC_TARGET ?=
+RELEASE_SYNC_TAG ?=
+RELEASE_SYNC_TARGET_BRANCH ?=
+RELEASE_SYNC_ARGS ?=
 ANDROID_KEYSTORE_BASE64 ?=
 ANDROID_KEYSTORE_FILE ?=
 ANDROID_KEY_ALIAS ?=
@@ -232,6 +249,9 @@ apkOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 # AAB 变量使用同一套转发规则
 aabOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
+# Git 发布同步变量使用同一套转发规则（令牌与 API 地址不在其中：只走环境变量）
+releaseSyncOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
+
 # 鸿蒙签名配置变量使用同一套转发规则（口令不在其中：只走环境变量或交互输入）
 harmonyOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
 
@@ -256,6 +276,10 @@ APK_FILE_ARGS = $(call apkOption,APK_FILE,--file)
 
 # 组合 aab 的参数：AAB_FILE 只在 make 命令行给出时转成 --file
 AAB_FILE_ARGS = $(call aabOption,AAB_FILE,--file)
+
+# 组合 release-sync 的参数：仓库 / 标签 / 目标分支只在 make 命令行给出时转成选项；
+# 令牌与 API 地址不转发，由命令读取环境变量（避免密钥进入 ps 与 CI 日志）
+RELEASE_SYNC_OPTIONS = $(call releaseSyncOption,RELEASE_SYNC_SOURCE,--source) $(call releaseSyncOption,RELEASE_SYNC_TARGET,--target) $(call releaseSyncOption,RELEASE_SYNC_TAG,--tag) $(call releaseSyncOption,RELEASE_SYNC_TARGET_BRANCH,--target-branch)
 
 # keystore 变量使用同一套转发规则；BASE64 与两个口令不转发（由命令读环境变量）
 keystoreOption = $(if $(filter command line,$(origin $(1))),$(2) "$($(1))")
@@ -317,6 +341,7 @@ help: ## Show help information
 	keystore-config-help keystore-config \
 	keystore-gen-help keystore-gen \
 	profile-help profile \
+	release-sync-help release-sync \
 	huawei-help \
 	huawei-signing-config-help huawei-signing-config \
 	huawei-service-account-help huawei-service-account \
@@ -376,6 +401,14 @@ aab-help: ## 查看 AAB 安装包帮助文档
 
 aab: ## 查看 AAB 安装包信息（AAB_FILE 必填；AAB_VERBOSE 输出全部字段）
 	@node src/publish-apk.js aab $(AAB_FILE_ARGS) $(AAB_ARGS)
+
+# ------------------------------------------------------- Git 发布同步
+
+release-sync-help: ## 同步 Git 发布帮助文档
+	node src/publish-apk.js release-sync --help
+
+release-sync: ## 同步 Git 发布（RELEASE_SYNC_SOURCE / RELEASE_SYNC_TARGET 必填；令牌用 CNB_* 环境变量；RELEASE_SYNC_ARGS 传 --tag / --dry-run 等）
+	@node src/publish-apk.js release-sync $(RELEASE_SYNC_OPTIONS) $(RELEASE_SYNC_ARGS)
 
 # ------------------------------------------------------- Android keystore
 
