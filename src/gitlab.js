@@ -452,16 +452,16 @@ class GitlabReleaseClient {
     return typeof project?.default_branch === 'string' ? project.default_branch : undefined
   }
 
-  /** 通用软件包页面地址（Release Link 指向它） */
+  /** 通用软件包 API 下载地址（Release Link 指向它，浏览器可直接下载） */
   async packageFileUrl(tag, fileName) {
     const project = await this.getProject()
-    const webBase =
-      typeof project?.web_url === 'string' && project.web_url !== ''
-        ? project.web_url.replace(/\/+$/, '')
-        : `${this.apiBase.replace(/\/api\/v4$/, '')}/${this.repo}`
+    const projectRef =
+      project?.id !== undefined && project.id !== null
+        ? String(project.id)
+        : encodeURIComponent(this.repo)
     return (
-      `${webBase}/-/packages/generic/${encodeURIComponent(this.packageName)}` +
-      `/${encodeURIComponent(String(tag))}/${encodeURIComponent(fileName)}`
+      `${this.apiBase}/projects/${encodeURIComponent(projectRef)}/packages/generic/` +
+      `${encodeURIComponent(this.packageName)}/${encodeURIComponent(String(tag))}/${encodeURIComponent(fileName)}`
     )
   }
 

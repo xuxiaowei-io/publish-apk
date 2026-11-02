@@ -180,6 +180,7 @@ async function startMock() {
           return
         }
         sendJson(response, 200, {
+          id: 88403877,
           path_with_namespace: PROJECT,
           default_branch: 'main',
           web_url: `https://gitlab.com/${PROJECT}`,
@@ -414,7 +415,7 @@ const TOKENS = {
     assert.equal(mock.linkCreates.length, 2)
     assert.equal(
       mock.linkCreates[0].url,
-      `https://gitlab.com/${PROJECT}/-/packages/generic/${PACKAGE}/${TAG}/app.apk`,
+      `${mock.base}/api/v4/projects/88403877/packages/generic/${PACKAGE}/${TAG}/app.apk`,
     )
     assert.equal(mock.linkCreates[0].link_type, 'package')
     assert.equal(mock.links.length, 2)
@@ -429,7 +430,7 @@ const TOKENS = {
     mock.links.push({
       id: 998,
       name: 'old.bin',
-      url: `https://gitlab.com/${PROJECT}/-/packages/generic/${PACKAGE}/${TAG}/old.bin`,
+      url: `${mock.base}/api/v4/projects/88403877/packages/generic/${PACKAGE}/${TAG}/old.bin`,
       link_type: 'package',
     })
     mock.packageFiles.push({
