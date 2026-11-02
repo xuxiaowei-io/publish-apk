@@ -857,7 +857,7 @@ const TOKEN_ENV = {
   const unsupported = await runCli([
     'release-sync',
     '--source',
-    'github.com/owner/repo',
+    'gitlab.com/owner/repo',
     '--target',
     'org/dst',
     '--source-token',
@@ -866,8 +866,8 @@ const TOKEN_ENV = {
     'y',
   ])
   assert.equal(unsupported.code, 1)
-  assert.match(unsupported.stderr, /暂不支持 github\.com/)
-  assert.match(unsupported.stderr, /GitHub 等平台/)
+  assert.match(unsupported.stderr, /暂不支持 gitlab\.com/)
+  assert.match(unsupported.stderr, /其它平台/)
   assert.match(unsupported.stderr, /gitee\.com/)
 
   const missingToken = await runCli([
@@ -936,8 +936,8 @@ const TOKEN_ENV = {
     'xuxiaowei.io/publish-apk',
   )
   assert.equal(parseRepositoryValue('org/repo').display, 'cnb.cool/org/repo')
-  assert.throws(() => parseRepositoryValue('github.com/owner/repo'), /暂不支持 github\.com/)
-  assert.throws(() => parseRepositoryValue('https://github.com/owner/repo'), /暂不支持 github\.com/)
+  assert.throws(() => parseRepositoryValue('gitlab.com/owner/repo'), /暂不支持 gitlab\.com/)
+  assert.throws(() => parseRepositoryValue('https://gitlab.com/owner/repo'), /暂不支持 gitlab\.com/)
   assert.throws(() => parseRepositoryValue('onlyone'), /组织\/仓库/)
   assert.throws(() => parseRepositoryValue('https://cnb.cool/org/repo?x=1'), /查询串/)
 }

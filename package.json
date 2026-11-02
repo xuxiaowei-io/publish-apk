@@ -40,6 +40,6 @@
   },
   "scripts": {
     "help": "node src/publish-apk.js",
-    "test": "node tests/sealed-box.test.js && node tests/github.test.js && node tests/keystore-config.test.js && node tests/release-sync.test.js && node tests/release-sync-gitee.test.js && node tests/release-sync-gitee-source.test.js"
+    "test": "node tests/sealed-box.test.js && node tests/github.test.js && node tests/keystore-config.test.js && node tests/release-sync.test.js && node tests/release-sync-gitee.test.js && node tests/release-sync-gitee-source.test.js && node tests/release-sync-github.test.js && node tests/release-sync-github-source.test.js"
   }
 }

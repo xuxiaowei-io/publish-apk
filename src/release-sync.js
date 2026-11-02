@@ -27,11 +27,11 @@
  *   }
  *    可选：getDefaultBranch() -> string，未显式给 --target-branch 时用于创建目标标签。
  *
- * 以后接 GitHub 等平台（Gitee 已实现）：
- *   1. 照 src/cnb.js / src/gitee.js 的形状新增适配器（如 src/github-release.js）；
+ * 以后接其它平台（Gitee / GitHub 已实现）：
+ *   1. 照 src/cnb.js / src/gitee.js / src/github-release.js 的形状新增适配器；
  *   2. 在下面的 PROVIDERS 里追加一行；
  *   3. 仓库地址解析会按 host 自动选择适配器，编排逻辑不用改。
- *     （GitHub 的 release API 与 CNB 接近，可参考现有两个适配器。）
+ *     （现有三个适配器覆盖了发布字段、标签、附件上传 / 表格回退与 digest 校验。）
  *
  * 为什么目标标签要基于分支重建：源仓库与目标仓库可能没有相同的提交历史，
  * 直接把源标签的 commit 搬到目标往往不可行；目标只关心「这个版本的发布」，
@@ -59,6 +59,7 @@ import {
 } from './cli.js'
 import { cnbReleaseProvider } from './cnb.js'
 import { giteeReleaseProvider } from './gitee.js'
+import { githubReleaseProvider } from './github-release.js'
 import { renderHelp } from './help.js'
 
 /** 根命令名 */
@@ -123,7 +124,7 @@ const VERBOSE_OFF_VALUES = new Set(['0', 'false', 'no', 'off'])
  * 平台适配器表：顺序即默认顺序；当前有 CNB 与 Gitee。
  * 新增平台时在这里追加，并把它的 host 写进适配器的 hosts。
  */
-const PROVIDERS = [cnbReleaseProvider, giteeReleaseProvider]
+const PROVIDERS = [cnbReleaseProvider, giteeReleaseProvider, githubReleaseProvider]
 
 /** 省略 host 时按 CNB 处理（Gitee 地址请写清 host） */
 const DEFAULT_PROVIDER = cnbReleaseProvider
@@ -135,8 +136,6 @@ const DEFAULT_PROVIDER = cnbReleaseProvider
  * 这样的 CNB 组织名本身带点，不能因为第一段像域名就误判成 GitHub 等平台。
  */
 const UNSUPPORTED_HOSTS = new Set([
-  'github.com',
-  'www.github.com',
   'gitlab.com',
   'www.gitlab.com',
   'gitcode.com',
@@ -199,7 +198,7 @@ function normalizeRepoPath(segments, stripGit = true) {
  *   https://cnb.cool/org/repo(.git)
  *   cnb.cool/org/repo
  *   git@cnb.cool:org/repo.git
- *   org/repo（省略 host，按当前唯一实现的 CNB 处理）
+ *   org/repo（省略 host，按 CNB 处理；Gitee / GitHub 请写清 host）
  *
  * 裸地址的歧义处理：
  *   - 第一段恰好是已实现的平台域名 → 平台 + 后面的路径；
@@ -262,7 +261,7 @@ export function parseRepositoryValue(value) {
     if (provider === undefined) {
       if (UNSUPPORTED_HOSTS.has(host)) {
         throw new Error(
-          `暂不支持 ${host}：当前支持 ${supportedHosts()}；GitHub 等平台的适配器后续加入`,
+          `暂不支持 ${host}：当前支持 ${supportedHosts()}；其它平台适配器后续加入`,
         )
       }
       throw new Error(
@@ -280,7 +279,7 @@ export function parseRepositoryValue(value) {
       segments = segments.slice(1)
     } else if (first !== undefined && UNSUPPORTED_HOSTS.has(first)) {
       throw new Error(
-        `暂不支持 ${first}：当前支持 ${supportedHosts()}；GitHub 等平台的适配器后续加入`,
+        `暂不支持 ${first}：当前支持 ${supportedHosts()}；其它平台适配器后续加入`,
       )
     } else {
       provider = DEFAULT_PROVIDER
@@ -336,7 +335,7 @@ function resolveVerbose(options, env, help) {
  * 解析令牌：命令行 > 通用环境变量 > 平台自己的环境变量。
  *
  * 通用变量由本命令定义，平台变量由适配器给出（CNB 是 CNB_SOURCE_TOKEN /
- * CNB_TARGET_TOKEN，以及两者共用的 CNB_TOKEN），便于以后加 GitHub 等平台。
+ * CNB_TARGET_TOKEN，以及两者共用的 CNB_TOKEN），便于以后接其它平台。
  */
 function resolveSyncToken(options, env, role, provider) {
   const option = role === 'source' ? OPTION_SOURCE_TOKEN : OPTION_TARGET_TOKEN
@@ -394,7 +393,7 @@ function renderReleaseSyncHelp() {
         entries: [
           [
             `${OPTION_SOURCE} <仓库>`,
-            `源仓库（提供发布与附件），必填。支持 https://cnb.cool/org/repo、https://gitee.com/owner/repo、cnb.cool/org/repo、git@cnb.cool:org/repo.git 或 org/repo；可用 ${ENV_SOURCE} 补齐`,
+            `源仓库（提供发布与附件），必填。支持 https://cnb.cool/org/repo、https://gitee.com/owner/repo、https://github.com/owner/repo、cnb.cool/org/repo、git@cnb.cool:org/repo.git 或 org/repo；可用 ${ENV_SOURCE} 补齐`,
           ],
           [
             `${OPTION_TARGET} <仓库>`,
@@ -410,7 +409,7 @@ function renderReleaseSyncHelp() {
           ],
           [
             `${OPTION_TARGET_BRANCH} <分支>`,
-            `目标标签不存在时基于哪个分支创建；未指定时优先用目标仓库默认分支（Gitee 可查询），否则 ${DEFAULT_TARGET_BRANCH}；可用 ${ENV_TARGET_BRANCH} 补齐`,
+            `目标标签不存在时基于哪个分支创建；未指定时优先用目标仓库默认分支（Gitee / GitHub 可查询），否则 ${DEFAULT_TARGET_BRANCH}；可用 ${ENV_TARGET_BRANCH} 补齐`,
           ],
           [
             `${OPTION_SOURCE_TOKEN} <令牌>`,
@@ -422,11 +421,11 @@ function renderReleaseSyncHelp() {
           ],
           [
             `${OPTION_SOURCE_API_BASE} <地址>`,
-            `源平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5（本地联调 / 代理时覆盖）`,
+            `源平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5 / GitHub https://api.github.com（本地联调 / 代理时覆盖）`,
           ],
           [
             `${OPTION_TARGET_API_BASE} <地址>`,
-            `目标平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5（本地联调 / 代理时覆盖）`,
+            `目标平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5 / GitHub https://api.github.com（本地联调 / 代理时覆盖）`,
           ],
           [OPTION_DRY_RUN, '只读取源发布与目标状态并打印计划，不创建标签 / 发布、不上传或删除附件'],
           [OPTION_VERBOSE, `输出详细日志（含接口地址、发布 ID、校验结果）；也可用 ${ENV_VERBOSE}`],
@@ -442,11 +441,11 @@ function renderReleaseSyncHelp() {
           [ENV_TARGET_BRANCH, `目标标签的起始分支，等价于 ${OPTION_TARGET_BRANCH}；未设置时优先用目标仓库默认分支，否则 ${DEFAULT_TARGET_BRANCH}`],
           [
             ENV_SOURCE_TOKEN,
-            `源仓库令牌；未设置时按平台读 CNB_SOURCE_TOKEN / CNB_TOKEN 或 GITEE_SOURCE_TOKEN / GITEE_TOKEN`,
+            `源仓库令牌；未设置时按平台读 CNB_SOURCE_TOKEN / CNB_TOKEN、GITEE_SOURCE_TOKEN / GITEE_TOKEN 或 GITHUB_SOURCE_TOKEN / GITHUB_TOKEN`,
           ],
           [
             ENV_TARGET_TOKEN,
-            `目标仓库令牌；未设置时按平台读 CNB_TARGET_TOKEN / CNB_TOKEN 或 GITEE_TARGET_TOKEN / GITEE_TOKEN`,
+            `目标仓库令牌；未设置时按平台读 CNB_TARGET_TOKEN / CNB_TOKEN、GITEE_TARGET_TOKEN / GITEE_TOKEN 或 GITHUB_TARGET_TOKEN / GITHUB_TOKEN`,
           ],
           [ENV_SOURCE_API_BASE, `源平台 API 地址，等价于 ${OPTION_SOURCE_API_BASE}`],
           [ENV_TARGET_API_BASE, `目标平台 API 地址，等价于 ${OPTION_TARGET_API_BASE}`],
@@ -455,6 +454,9 @@ function renderReleaseSyncHelp() {
           ['CNB_SOURCE_API_BASE / CNB_TARGET_API_BASE / CNB_API_BASE', 'CNB API 地址；CNB_API_BASE 对源与目标都生效'],
           ['GITEE_SOURCE_TOKEN / GITEE_TARGET_TOKEN / GITEE_TOKEN', 'Gitee 私人访问令牌；源与目标可用同一个 GITEE_TOKEN'],
           ['GITEE_SOURCE_API_BASE / GITEE_TARGET_API_BASE / GITEE_API_BASE', 'Gitee API 地址；默认 https://gitee.com/api/v5'],
+          ['GITHUB_SOURCE_TOKEN / GITHUB_TARGET_TOKEN / GITHUB_TOKEN', 'GitHub 访问令牌；源与目标可用同一个 GITHUB_TOKEN'],
+          ['GITHUB_SOURCE_API_BASE / GITHUB_TARGET_API_BASE / GITHUB_API_BASE / GITHUB_API_URL', 'GitHub API 地址；默认 https://api.github.com'],
+          ['GITHUB_SOURCE_UPLOAD_BASE / GITHUB_TARGET_UPLOAD_BASE / GITHUB_UPLOAD_BASE', 'GitHub 附件上传地址；默认 github.com 用 https://uploads.github.com，GHES 用 /api/uploads'],
         ],
       },
       {
@@ -462,9 +464,10 @@ function renderReleaseSyncHelp() {
         entries: [
           ['https://cnb.cool/org/repo', '完整网页地址，可带 .git 后缀'],
           ['https://gitee.com/owner/repo', 'Gitee 仓库地址；也可写 gitee.com/owner/repo'],
+          ['https://github.com/owner/repo', 'GitHub 仓库地址；也可写 github.com/owner/repo'],
           ['cnb.cool/org/repo', '省略协议'],
           ['git@cnb.cool:org/repo.git', 'SCP 风格 SSH 地址'],
-          ['org/repo', `省略 host 时按 ${DEFAULT_PROVIDER.label} 处理（组织名可带点，如 xuxiaowei.io/repo）；Gitee 请写清 host`],
+          ['org/repo', `省略 host 时按 ${DEFAULT_PROVIDER.label} 处理（组织名可带点，如 xuxiaowei.io/repo）；Gitee / GitHub 请写清 host`],
         ],
       },
       {
@@ -478,6 +481,7 @@ function renderReleaseSyncHelp() {
           ['草稿 / 预发布', '按源发布原样同步；draft 发布同样会搬运附件'],
           ['安全兜底', '源发布响应没有附件列表时，跳过“删除目标多余附件”，避免误删'],
           ['Gitee 附件', '目标为 Gitee 时默认不下载 / 不上传产物，直接在发布说明生成 Markdown 下载表格'],
+          ['GitHub 附件', '正常下载 / 上传；asset digest 用于 SHA 跳过或替换；上传返回 404 时按同名 + 大小 + sha256 核对是否已落盘'],
         ],
       },
       {
@@ -486,6 +490,7 @@ function renderReleaseSyncHelp() {
           ['CNB 源仓库', 'repo-release:r（读取发布、下载附件）'],
           ['CNB 目标仓库', 'repo-release:rw（创建标签、创建 / 更新发布、上传 / 确认 / 删除附件）'],
           ['Gitee 令牌', '私人访问令牌，需 projects 读写权限'],
+          ['GitHub 令牌', 'Contents 读写（fine-grained Contents: Read and write / classic repo）；源只需读'],
         ],
       },
       {
@@ -508,7 +513,8 @@ function renderReleaseSyncHelp() {
         entries: [
           ['CNB（cnb.cool）', '已实现发布、标签、附件上传与下载'],
           ['Gitee（gitee.com）', '已实现发布、标签、附件下载；目标为 Gitee 时直接生成 Markdown 下载表格'],
-          ['GitHub 等', '适配器接口已预留，后续按 src/cnb.js / src/gitee.js 的形状加入'],
+          ['GitHub（github.com）', '已实现发布、标签、附件上传 / 下载；GitHub Enterprise 可通过 API / 上传地址覆盖'],
+          ['其它平台', '适配器接口已预留，后续按 src/cnb.js / src/gitee.js / src/github-release.js 的形状加入'],
         ],
       },
     ],
@@ -520,6 +526,7 @@ function renderReleaseSyncHelp() {
       `  CNB_TOKEN=<令牌> ${PROGRAM} ${COMMAND_NAME} --source org/source --target org/target --tag v1.0.0`,
       `  ${PROGRAM} ${COMMAND_NAME} --source org/source --target org/target --tag v1.0.0 --dry-run`,
       `  ${PROGRAM} ${COMMAND_NAME} --source org/source --target gitee.com/owner/repo --tag v1.0.0`,
+      `  ${PROGRAM} ${COMMAND_NAME} --source org/source --target github.com/owner/repo --tag v1.0.0`,
       '',
       '说明:',
       `  - ${OPTION_TAG} 与 ${OPTION_LATEST} 不能同时使用；都不给时同步最新发布。`,
@@ -995,11 +1002,15 @@ async function runReleaseSync(argv, env) {
     repo: source.repo,
     token: sourceToken.token,
     apiBase: sourceApiBase,
+    env,
+    role: 'source',
   })
   const targetClient = target.provider.createClient({
     repo: target.repo,
     token: targetToken.token,
     apiBase: targetApiBase,
+    env,
+    role: 'target',
   })
 
   // 1) 读取源发布
