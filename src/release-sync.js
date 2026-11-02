@@ -86,6 +86,8 @@ const OPTION_TARGET_TOKEN = '--target-token'
 const OPTION_SOURCE_API_BASE = '--source-api-base'
 /** 目标平台 API 地址（本地联调 / 代理） */
 const OPTION_TARGET_API_BASE = '--target-api-base'
+/** 目标为 GitLab 时必填：Generic Package Registry 的软件包名 */
+const OPTION_PACKAGE_NAME = '--package-name'
 /** 开关：只打印计划，不写入目标 */
 const OPTION_DRY_RUN = '--dry-run'
 /** 开关：输出详细日志 */
@@ -101,6 +103,7 @@ const SYNC_OPTIONS = new Set([
   OPTION_TARGET_TOKEN,
   OPTION_SOURCE_API_BASE,
   OPTION_TARGET_API_BASE,
+  OPTION_PACKAGE_NAME,
   OPTION_DRY_RUN,
   OPTION_VERBOSE,
 ])
@@ -115,6 +118,7 @@ const ENV_SOURCE_TOKEN = 'RELEASE_SYNC_SOURCE_TOKEN'
 const ENV_TARGET_TOKEN = 'RELEASE_SYNC_TARGET_TOKEN'
 const ENV_SOURCE_API_BASE = 'RELEASE_SYNC_SOURCE_API_BASE'
 const ENV_TARGET_API_BASE = 'RELEASE_SYNC_TARGET_API_BASE'
+const ENV_PACKAGE_NAME = 'RELEASE_SYNC_PACKAGE_NAME'
 const ENV_VERBOSE = 'RELEASE_SYNC_VERBOSE'
 
 /** 默认目标分支：CNB 仓库的默认分支通常是 main */
@@ -433,6 +437,10 @@ function renderReleaseSyncHelp() {
             `${OPTION_TARGET_API_BASE} <地址>`,
             `目标平台 API 地址，默认 CNB https://api.cnb.cool / Gitee https://gitee.com/api/v5 / GitHub https://api.github.com / GitCode https://api.gitcode.com/api/v5 / GitLab https://gitlab.com/api/v4 / GitLink https://www.gitlink.org.cn/api（本地联调 / 代理时覆盖）`,
           ],
+          [
+            `${OPTION_PACKAGE_NAME} <名称>`,
+            `目标为 GitLab 时必填：Generic Package Registry 的软件包名；版本使用发布 tag。也可用 ${ENV_PACKAGE_NAME} / GITLAB_PACKAGE_NAME 补齐`,
+          ],
           [OPTION_DRY_RUN, '只读取源发布与目标状态并打印计划，不创建标签 / 发布、不上传或删除附件'],
           [OPTION_VERBOSE, `输出详细日志（含接口地址、发布 ID、校验结果）；也可用 ${ENV_VERBOSE}`],
           ['-h, --help', '显示帮助信息'],
@@ -455,6 +463,7 @@ function renderReleaseSyncHelp() {
           ],
           [ENV_SOURCE_API_BASE, `源平台 API 地址，等价于 ${OPTION_SOURCE_API_BASE}`],
           [ENV_TARGET_API_BASE, `目标平台 API 地址，等价于 ${OPTION_TARGET_API_BASE}`],
+          [ENV_PACKAGE_NAME, `目标为 GitLab 时的软件包名，等价于 ${OPTION_PACKAGE_NAME}；也可用 GITLAB_PACKAGE_NAME`],
           [ENV_VERBOSE, '输出详细日志，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
           ['CNB_SOURCE_TOKEN / CNB_TARGET_TOKEN / CNB_TOKEN', 'CNB 平台令牌；源与目标可用同一个 CNB_TOKEN'],
           ['CNB_SOURCE_API_BASE / CNB_TARGET_API_BASE / CNB_API_BASE', 'CNB API 地址；CNB_API_BASE 对源与目标都生效'],
@@ -482,7 +491,7 @@ function renderReleaseSyncHelp() {
           ['https://gitlink.org.cn/owner/repo', 'GitLink 仓库地址；也可写 gitlink.org.cn/owner/repo'],
           ['cnb.cool/org/repo', '省略协议'],
           ['git@cnb.cool:org/repo.git', 'SCP 风格 SSH 地址'],
-          ['org/repo', `省略 host 时按 ${DEFAULT_PROVIDER.label} 处理（组织名可带点，如 xuxiaowei.io/repo）；Gitee / GitHub 请写清 host`],
+          ['org/repo', `省略 host 时按 ${DEFAULT_PROVIDER.label} 处理（组织名可带点，如 xuxiaowei.io/repo）；Gitee / GitHub / GitCode / GitLab / GitLink 请写清 host`],
         ],
       },
       {
@@ -498,7 +507,7 @@ function renderReleaseSyncHelp() {
           ['Gitee 附件', '目标为 Gitee 时默认不下载 / 不上传产物，直接在发布说明生成 Markdown 下载表格'],
           ['GitHub 附件', '正常下载 / 上传；asset digest 用于 SHA 跳过或替换；上传返回 404 时按同名 + 大小 + sha256 核对是否已落盘'],
           ['GitCode 附件', '正常下载 / 上传；先取 upload_url 再 PUT；digest 用于 SHA 跳过或替换，同名先删后传'],
-          ['GitLab 附件', 'Release 原生只有 links/sources，不能上传文件；目标为 GitLab 时直接生成 Markdown 下载表格'],
+          ['GitLab 附件', '上传到 Generic Package Registry（release-sync/:tag/:file），再创建 Release Link'],
           ['GitLink 附件', '正常下载 / 上传；先 POST /attachments.json 拿附件 ID，再用 attachment_ids 关联发布'],
         ],
       },
@@ -510,7 +519,7 @@ function renderReleaseSyncHelp() {
           ['Gitee 令牌', '私人访问令牌，需 projects 读写权限'],
           ['GitHub 令牌', 'Contents 读写（fine-grained Contents: Read and write / classic repo）；源只需读'],
           ['GitCode 令牌', '仓库 / 发布读写权限；源只需读'],
-          ['GitLab 令牌', 'api / write_repository 权限；源只需读'],
+          ['GitLab 令牌', 'api 权限（含 Package Registry 写）；源只需读'],
           ['GitLink 令牌', '仓库 / 发布写权限；源只需读'],
         ],
       },
@@ -536,7 +545,7 @@ function renderReleaseSyncHelp() {
           ['Gitee（gitee.com）', '已实现发布、标签、附件下载；目标为 Gitee 时直接生成 Markdown 下载表格'],
           ['GitHub（github.com）', '已实现发布、标签、附件上传 / 下载；GitHub Enterprise 可通过 API / 上传地址覆盖'],
           ['GitCode（gitcode.com）', '已实现发布、标签、附件上传 / 下载；附件先取 upload_url 再 PUT'],
-          ['GitLab（gitlab.com / 自建）', '已实现发布、标签、Release Links；目标为 GitLab 时直接生成 Markdown 下载表格'],
+          ['GitLab（gitlab.com / 自建）', '已实现发布、标签、Generic Package 上传与 Release Links'],
           ['GitLink（gitlink.org.cn）', '已实现发布、标签、附件上传 / 下载；附件经 /attachments.json 上传后关联发布'],
           ['其它平台', '适配器接口已预留，后续按现有适配器的形状加入'],
         ],
@@ -560,6 +569,7 @@ function renderReleaseSyncHelp() {
       `  - 目标标签已存在时不会移动；如需换起点，请先在目标仓库删除该标签再重跑。`,
       '  - 附件先下载到系统临时目录，再流式上传；结束后自动清理临时文件。',
       '  - 重跑时同名附件先比 SHA：一致跳过、不一致覆盖；目标多出的附件会被删除。',
+      '  - 目标为 GitLab 时必须用 --package-name 指定 Generic Package 名称；附件上传到 Package Registry 后创建 Release Links。',
       '  - 目标为 Gitee 时默认跳过附件下载 / 上传，直接在发布说明中生成 Markdown 下载表格。',
     ],
   })
@@ -970,6 +980,28 @@ async function runReleaseSync(argv, env) {
 
   const source = parseRepositoryOrUsage(sourceValue, OPTION_SOURCE, renderReleaseSyncHelp)
   const target = parseRepositoryOrUsage(targetValue, OPTION_TARGET, renderReleaseSyncHelp)
+
+  const packageNameRaw =
+    options.get(OPTION_PACKAGE_NAME) ??
+    readEnv(env, ENV_PACKAGE_NAME) ??
+    readEnv(env, 'GITLAB_PACKAGE_NAME') ??
+    readEnv(env, 'GITLAB_TARGET_PACKAGE_NAME')
+  const packageName =
+    packageNameRaw === undefined ? undefined : packageNameRaw.trim() || undefined
+  if (target.provider.id === 'gitlab') {
+    if (packageName === undefined) {
+      throw new UsageError(
+        `目标为 GitLab 时必须指定软件包名：${OPTION_PACKAGE_NAME} <名称>（或 ${ENV_PACKAGE_NAME} / GITLAB_PACKAGE_NAME）`,
+        renderReleaseSyncHelp(),
+      )
+    }
+    if (/\s/.test(packageName)) {
+      throw new UsageError(
+        `${OPTION_PACKAGE_NAME} 不能包含空白字符，实际: "${packageName}"`,
+        renderReleaseSyncHelp(),
+      )
+    }
+  }
   if (source.provider.id === target.provider.id && source.repo.toLowerCase() === target.repo.toLowerCase()) {
     throw new UsageError(
       `源仓库与目标仓库相同（${source.display}），请指定不同的 --source / --target`,
@@ -1040,6 +1072,7 @@ async function runReleaseSync(argv, env) {
     apiBase: targetApiBase,
     env,
     role: 'target',
+    packageName,
   })
 
   // 1) 读取源发布
@@ -1186,7 +1219,13 @@ async function runReleaseSync(argv, env) {
   const preserveTargetAssets = target.provider.preserveTargetAssets === true
   const extraAssets =
     sourceAssetsKnown && !preserveTargetAssets
-      ? [...targetAssetMap.values()].filter((asset) => !sourceAssetNames.has(asset.name))
+      ? [...targetAssetMap.values()]
+          .filter((asset) => !sourceAssetNames.has(asset.name))
+          .filter(
+            (asset) =>
+              typeof target.provider.isManagedAsset !== 'function' ||
+              target.provider.isManagedAsset(asset),
+          )
       : []
   if (!sourceAssetsKnown) {
     log('警告: 源发布响应没有附件列表，跳过删除目标多余附件')
@@ -1420,7 +1459,7 @@ async function runReleaseSync(argv, env) {
           continue
         }
         try {
-          await targetClient.deleteAsset(releaseId, item.id, { tag: sourceTag })
+          await targetClient.deleteAsset(releaseId, item.id, { tag: sourceTag, assetName: item.name })
         } catch (error) {
           log(`警告: 清理已上传附件 ${item.name} 失败: ${error.message}`)
         }
@@ -1434,7 +1473,7 @@ async function runReleaseSync(argv, env) {
           continue
         }
         try {
-          await targetClient.deleteAsset(releaseId, asset.id, { tag: sourceTag })
+          await targetClient.deleteAsset(releaseId, asset.id, { tag: sourceTag, assetName: asset.name })
           deleted.push({ name: asset.name, size: asset.size })
           log(`${label}: 已删除`)
         } catch (error) {
@@ -1467,7 +1506,7 @@ async function runReleaseSync(argv, env) {
         }
         log(`${label}: 删除中`)
         try {
-          await targetClient.deleteAsset(releaseId, asset.id, { tag: sourceTag })
+          await targetClient.deleteAsset(releaseId, asset.id, { tag: sourceTag, assetName: asset.name })
         } catch (error) {
           throw new Error(`删除 ${label} 失败: ${error.message}`)
         }

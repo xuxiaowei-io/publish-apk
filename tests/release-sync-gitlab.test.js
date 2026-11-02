@@ -1,12 +1,13 @@
 /**
  * release-sync：CNB 源 → GitLab 目标端到端测试。
  *
- * GitLab Release 不能上传任意附件，目标是：
- *   - 目标标签基于分支创建；
- *   - 发布说明直接生成 Markdown 下载表格；
- *   - 不下载源附件、不上传 GitLab 附件；
- *   - 目标已有 Release Link 属于发布者内容，保留不删；
- *   - Release 按 tag 更新（GitLab 没有 release id）。
+ * GitLab 目标流程：
+ *   1. 目标标签基于分支创建；
+ *   2. 附件先 PUT 到 Generic Package Registry：
+ *      /projects/:id/packages/generic/release-sync/:tag/:file
+ *   3. 再创建 / 更新 Release Link，指向通用包地址；
+ *   4. 同名 package file 先删除，避免 GitLab 同版本重复上传变成追加；
+ *   5. 只清理 release-sync 管理的 package 链接，手工链接保留。
  */
 import assert from 'node:assert/strict'
 import { spawn } from 'node:child_process'
@@ -20,6 +21,7 @@ const CNB_TOKEN = 'cnb-source-token'
 const GITLAB_TOKEN = 'gitlab-target-token'
 const SOURCE_REPO = 'org/src'
 const PROJECT = 'group/sub/project'
+const PACKAGE = 'release-sync'
 const TAG = 'v1.0.0'
 
 const sha256 = (text) => createHash('sha256').update(text).digest('hex')
@@ -57,23 +59,27 @@ function sendJson(response, status, payload) {
   response.end(text)
 }
 
-function sendNotFound(response) {
-  sendJson(response, 404, { message: '404 Not Found' })
-}
-
 async function startMock() {
   const state = {
     requests: [],
     tag: null,
     release: null,
     links: [],
-    tagCreated: undefined,
+    packages: [],
+    packageFiles: [],
+    packageUploads: [],
+    packageDeletes: [],
+    linkCreates: [],
+    linkUpdates: [],
+    deletedLinks: [],
     releaseCreated: undefined,
     releaseUpdated: [],
-    deletedLinks: [],
     downloads: 0,
     base: '',
   }
+  let nextPackageId = 1
+  let nextFileId = 1
+  let nextLinkId = 1
 
   const projectPath = `/api/v4/projects/${encodeURIComponent(PROJECT)}`
   const withRelease = () =>
@@ -82,11 +88,11 @@ async function startMock() {
       : {
           ...state.release,
           assets: {
-            count: 4 + state.links.length,
+            count: state.links.length,
+            links: state.links,
             sources: [
               { format: 'zip', url: `https://gitlab.com/${PROJECT}/-/archive/${TAG}/project-${TAG}.zip` },
             ],
-            links: state.links,
           },
         }
 
@@ -99,15 +105,16 @@ async function startMock() {
         path: url.pathname,
         query: Object.fromEntries(url.searchParams.entries()),
         privateToken: request.headers['private-token'],
+        authorization: request.headers.authorization,
+        contentType: request.headers['content-type'],
         body,
       }
       state.requests.push(record)
 
       // ---------------- CNB 源仓库 ----------------
       if (url.pathname.startsWith(`/${SOURCE_REPO}/-/`)) {
-        if (record.privateToken !== undefined) {
-          // CNB 源不应收到 GitLab 令牌
-          sendJson(response, 400, { message: 'unexpected token' })
+        if (request.headers.authorization !== `Bearer ${CNB_TOKEN}`) {
+          sendJson(response, 401, { errcode: 16, errmsg: 'not logged in' })
           return
         }
         if (request.method === 'GET' && url.pathname === `/${SOURCE_REPO}/-/releases/tags/${TAG}`) {
@@ -142,12 +149,28 @@ async function startMock() {
           })
           return
         }
-        // 目标为 GitLab 时不应下载源附件；若发生，返回 500 让测试失败得更明确
-        if (url.pathname.includes('/releases/download/')) {
+        if (request.method === 'GET' && url.pathname.endsWith(`/releases/download/${TAG}/app.apk`)) {
           state.downloads += 1
-          sendJson(response, 500, { message: 'unexpected download' })
+          response.writeHead(302, { location: `${state.base}/storage/source/app.apk` })
+          response.end()
           return
         }
+        if (request.method === 'GET' && url.pathname.endsWith(`/releases/download/${TAG}/notes.txt`)) {
+          state.downloads += 1
+          response.writeHead(302, { location: `${state.base}/storage/source/notes.txt` })
+          response.end()
+          return
+        }
+      }
+      if (request.method === 'GET' && url.pathname === '/storage/source/app.apk') {
+        response.writeHead(200, { 'content-type': 'application/vnd.android.package-archive' })
+        response.end('hello')
+        return
+      }
+      if (request.method === 'GET' && url.pathname === '/storage/source/notes.txt') {
+        response.writeHead(200, { 'content-type': 'text/plain' })
+        response.end('note')
+        return
       }
 
       // ---------------- GitLab 目标项目 ----------------
@@ -156,46 +179,31 @@ async function startMock() {
           sendJson(response, 401, { message: '401 Unauthorized' })
           return
         }
-        sendJson(response, 200, { path_with_namespace: PROJECT, default_branch: 'main' })
+        sendJson(response, 200, {
+          path_with_namespace: PROJECT,
+          default_branch: 'main',
+          web_url: `https://gitlab.com/${PROJECT}`,
+        })
         return
       }
       if (url.pathname === `${projectPath}/repository/tags/${TAG}`) {
-        if (record.privateToken !== GITLAB_TOKEN) {
-          sendJson(response, 401, { message: '401 Unauthorized' })
-          return
-        }
         if (state.tag === null) {
-          sendNotFound(response)
+          sendJson(response, 404, { message: '404 Not Found' })
           return
         }
         sendJson(response, 200, state.tag)
         return
       }
-      if (url.pathname === `${projectPath}/repository/tags`) {
-        if (request.method === 'POST') {
-          if (record.privateToken !== GITLAB_TOKEN) {
-            sendJson(response, 401, { message: '401 Unauthorized' })
-            return
-          }
-          state.tagCreated = body
-          state.tag = { name: body.tag_name, commit: { id: 'branch-sha' } }
-          sendJson(response, 201, state.tag)
-          return
-        }
+      if (url.pathname === `${projectPath}/repository/tags` && request.method === 'POST') {
+        state.tag = { name: body.tag_name, commit: { id: 'branch-sha' } }
+        sendJson(response, 201, state.tag)
+        return
       }
       if (url.pathname === `${projectPath}/releases` && request.method === 'GET') {
-        if (record.privateToken !== GITLAB_TOKEN) {
-          sendJson(response, 401, { message: '401 Unauthorized' })
-          return
-        }
         sendJson(response, 200, state.release === null ? [] : [withRelease()])
         return
       }
       if (url.pathname === `${projectPath}/releases` && request.method === 'POST') {
-        if (record.privateToken !== GITLAB_TOKEN) {
-          sendJson(response, 401, { message: '401 Unauthorized' })
-          return
-        }
         state.releaseCreated = body
         state.release = {
           tag_name: body.tag_name,
@@ -207,44 +215,102 @@ async function startMock() {
         return
       }
       if (url.pathname === `${projectPath}/releases/${TAG}` && request.method === 'GET') {
-        if (record.privateToken !== GITLAB_TOKEN) {
-          sendJson(response, 401, { message: '401 Unauthorized' })
-          return
-        }
         if (state.release === null) {
-          sendNotFound(response)
+          sendJson(response, 404, { message: '404 Not Found' })
           return
         }
         sendJson(response, 200, withRelease())
         return
       }
       if (url.pathname === `${projectPath}/releases/${TAG}` && request.method === 'PUT') {
-        if (record.privateToken !== GITLAB_TOKEN) {
-          sendJson(response, 401, { message: '401 Unauthorized' })
-          return
-        }
         state.releaseUpdated.push(body)
         state.release = { ...state.release, ...body }
         sendJson(response, 200, withRelease())
         return
       }
-      if (
-        url.pathname.startsWith(`${projectPath}/releases/${TAG}/assets/links/`) &&
-        request.method === 'DELETE'
-      ) {
-        if (record.privateToken !== GITLAB_TOKEN) {
-          sendJson(response, 401, { message: '401 Unauthorized' })
-          return
+
+      // Release links
+      if (url.pathname === `${projectPath}/releases/${TAG}/assets/links` && request.method === 'GET') {
+        sendJson(response, 200, state.links)
+        return
+      }
+      if (url.pathname === `${projectPath}/releases/${TAG}/assets/links` && request.method === 'POST') {
+        state.linkCreates.push(body)
+        const link = { id: nextLinkId, ...body }
+        nextLinkId += 1
+        state.links.push(link)
+        sendJson(response, 201, link)
+        return
+      }
+      if (url.pathname.startsWith(`${projectPath}/releases/${TAG}/assets/links/`) && request.method === 'PUT') {
+        const id = Number(url.pathname.split('/').pop())
+        state.linkUpdates.push({ id, body })
+        const link = state.links.find((item) => item.id === id)
+        if (link !== undefined) {
+          Object.assign(link, body)
         }
+        sendJson(response, 200, link)
+        return
+      }
+      if (url.pathname.startsWith(`${projectPath}/releases/${TAG}/assets/links/`) && request.method === 'DELETE') {
         const id = Number(url.pathname.split('/').pop())
         state.deletedLinks.push(id)
-        state.links = state.links.filter((link) => link.id !== id)
+        state.links = state.links.filter((item) => item.id !== id)
         response.writeHead(204)
         response.end()
         return
       }
 
-      sendNotFound(response)
+      // Generic package registry
+      if (url.pathname === `${projectPath}/packages` && request.method === 'GET') {
+        sendJson(response, 200, state.packages)
+        return
+      }
+      if (url.pathname === `${projectPath}/packages/1/package_files` && request.method === 'GET') {
+        sendJson(response, 200, state.packageFiles)
+        return
+      }
+      if (
+        url.pathname.startsWith(`${projectPath}/packages/1/package_files/`) &&
+        request.method === 'DELETE'
+      ) {
+        const id = Number(url.pathname.split('/').pop())
+        state.packageDeletes.push(id)
+        state.packageFiles = state.packageFiles.filter((item) => item.id !== id)
+        response.writeHead(204)
+        response.end()
+        return
+      }
+      if (
+        url.pathname.startsWith(`${projectPath}/packages/generic/${PACKAGE}/${TAG}/`) &&
+        request.method === 'PUT'
+      ) {
+        const fileName = decodeURIComponent(url.pathname.split('/').pop())
+        state.packageUploads.push({
+          name: fileName,
+          size: body === undefined ? 0 : body.length,
+          body,
+          privateToken: record.privateToken,
+          contentType: record.contentType,
+        })
+        if (state.packages.length === 0) {
+          state.packages.push({ id: nextPackageId, name: PACKAGE, version: TAG, package_type: 'generic' })
+        }
+        const file = {
+          id: nextFileId,
+          package_id: nextPackageId,
+          file_name: fileName,
+          size: body === undefined ? 0 : body.length,
+          file_sha256: sha256(body?.toString('utf8') ?? ''),
+        }
+        nextFileId += 1
+        state.packageFiles.push(file)
+        response.writeHead(201)
+        response.end()
+        return
+      }
+
+      sendJson(response, 404, { message: '404 Not Found' })
     })().catch(() => {
       if (!response.headersSent) {
         sendJson(response, 500, { message: 'mock error' })
@@ -311,6 +377,8 @@ const ARGS = (base) => [
   base,
   '--target-api-base',
   `${base}/api/v4`,
+  '--package-name',
+  PACKAGE,
 ]
 
 const TOKENS = {
@@ -324,40 +392,90 @@ const TOKENS = {
     const result = await runCli(ARGS(mock.base), TOKENS)
     assert.equal(result.code, 0, result.stderr)
     assert.match(result.stdout, /^目标发布: gitlab\.com\/group\/sub\/project@v1\.0\.0（已创建）$/m)
-    assert.match(result.stdout, /目标平台使用 Markdown 下载表格/)
-    assert.match(result.stdout, /附件: 2 个（目标平台使用 Markdown 下载表格/)
+    assert.match(result.stdout, /^附件: 2 个（已上传 2，跳过 0）$/m)
 
-    assert.deepEqual(mock.tagCreated, { tag_name: TAG, ref: 'main' })
+    assert.deepEqual(mock.tagCreated ?? mock.tag, { name: TAG, commit: { id: 'branch-sha' } })
     assert.equal(mock.releaseCreated.name, `${TAG} CNB 发布`)
     assert.equal(mock.releaseCreated.tag_name, TAG)
     assert.equal(mock.releaseCreated.ref, 'main')
+    assert.equal(mock.releaseCreated.description, '## CNB 源说明')
     assert.equal(Object.hasOwn(mock.releaseCreated, 'draft'), false)
     assert.equal(Object.hasOwn(mock.releaseCreated, 'prerelease'), false)
     assert.equal(Object.hasOwn(mock.releaseCreated, 'make_latest'), false)
-    assert.match(mock.releaseCreated.description, /## CNB 源说明/)
-    assert.match(mock.releaseCreated.description, /<!-- release-sync:assets:start -->/)
-    assert.match(mock.releaseCreated.description, /目标平台 GitLab 不支持上传发布附件/)
-    assert.match(mock.releaseCreated.description, /https:\/\/cnb\.cool\/org\/src\/-\/releases\/download\/v1\.0\.0\/app\.apk/)
-    assert.match(mock.releaseCreated.description, /https:\/\/cnb\.cool\/org\/src\/-\/releases\/download\/v1\.0\.0\/notes\.txt/)
 
-    // 目标为 GitLab：不下载源附件、不上传附件
-    assert.equal(mock.downloads, 0)
-    assert.equal(mock.requests.filter((item) => item.method === 'POST' && item.path.includes('/assets')).length, 0)
+    assert.equal(mock.downloads, 2)
+    assert.equal(mock.packageUploads.length, 2)
+    assert.equal(mock.packageUploads[0].name, 'app.apk')
+    assert.equal(mock.packageUploads[0].privateToken, GITLAB_TOKEN)
+    assert.equal(mock.packageUploads[0].body.toString('utf8'), 'hello')
+    assert.equal(mock.packageUploads[1].name, 'notes.txt')
+    assert.equal(mock.packageUploads[1].body.toString('utf8'), 'note')
 
-    // 第二次：目标说明改成旧的 + 多一个 Release Link，应更新表格但保留 Link
-    mock.release = { ...mock.release, description: '旧说明' }
-    mock.links.push({ id: 999, name: 'extra.txt', url: 'https://example.com/extra.txt', link_type: 'other' })
+    assert.equal(mock.linkCreates.length, 2)
+    assert.equal(
+      mock.linkCreates[0].url,
+      `https://gitlab.com/${PROJECT}/-/packages/generic/${PACKAGE}/${TAG}/app.apk`,
+    )
+    assert.equal(mock.linkCreates[0].link_type, 'package')
+    assert.equal(mock.links.length, 2)
+
+    // 第二次：同名 package file 删除后重传；Release Link 更新；手工链接保留
+    mock.links.push({
+      id: 999,
+      name: 'manual-doc',
+      url: 'https://example.com/docs',
+      link_type: 'other',
+    })
+    mock.links.push({
+      id: 998,
+      name: 'old.bin',
+      url: `https://gitlab.com/${PROJECT}/-/packages/generic/${PACKAGE}/${TAG}/old.bin`,
+      link_type: 'package',
+    })
+    mock.packageFiles.push({
+      id: 100,
+      package_id: 1,
+      file_name: 'old.bin',
+      size: 3,
+      file_sha256: sha256('old'),
+    })
     const second = await runCli(ARGS(mock.base), TOKENS)
     assert.equal(second.code, 0, second.stderr)
-    assert.match(second.stdout, /目标平台使用 Markdown 下载表格/)
-    assert.equal(mock.releaseUpdated.length, 1)
-    assert.match(mock.releaseUpdated[0].description, /<!-- release-sync:assets:start -->/)
-    assert.deepEqual(mock.deletedLinks, [])
-    assert.ok(mock.links.some((link) => link.id === 999))
-    assert.equal(mock.downloads, 0)
+    assert.match(second.stdout, /^附件: 2 个（已上传 2，跳过 0，删除多余 1）$/m)
+    assert.equal(mock.packageUploads.length, 4)
+    assert.equal(mock.packageDeletes.includes(1), true)
+    assert.equal(mock.packageDeletes.includes(2), true)
+    assert.equal(mock.packageDeletes.includes(100), true)
+    assert.equal(mock.linkUpdates.length, 2)
+    assert.deepEqual(mock.deletedLinks, [998])
+    assert.equal(mock.links.some((link) => link.id === 999), true)
+    assert.equal(mock.links.some((link) => link.id === 998), false)
+    assert.equal(mock.releaseUpdated.length, 0)
   } finally {
     await mock.close()
   }
+}
+
+// 目标为 GitLab 但未指定软件包名：应直接报参数错误
+{
+  const missing = await runCli(
+    [
+      'release-sync',
+      '--source',
+      `https://cnb.cool/${SOURCE_REPO}`,
+      '--target',
+      `https://gitlab.com/${PROJECT}`,
+      '--tag',
+      TAG,
+      '--source-token',
+      'x',
+      '--target-token',
+      'y',
+    ],
+    {},
+  )
+  assert.equal(missing.code, 1)
+  assert.match(missing.stderr, /目标为 GitLab 时必须指定软件包名/)
 }
 
 console.log('release-sync: CNB 源 → GitLab 目标测试通过')

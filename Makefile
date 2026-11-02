@@ -105,6 +105,7 @@ SHELL := /usr/bin/env bash
 #     GITCODE_SOURCE_API_BASE / GITCODE_TARGET_API_BASE / GITCODE_API_BASE
 #     GITLAB_SOURCE_TOKEN / GITLAB_TARGET_TOKEN / GITLAB_TOKEN
 #     GITLAB_SOURCE_API_BASE / GITLAB_TARGET_API_BASE / GITLAB_API_BASE
+#     RELEASE_SYNC_PACKAGE_NAME（目标为 GitLab 时必填，也可用 GITLAB_PACKAGE_NAME）
 #     GITLINK_SOURCE_TOKEN / GITLINK_TARGET_TOKEN / GITLINK_TOKEN
 #     GITLINK_SOURCE_API_BASE / GITLINK_TARGET_API_BASE / GITLINK_API_BASE
 #   也认 RELEASE_SYNC_SOURCE_TOKEN / RELEASE_SYNC_TARGET_TOKEN 等命令自己的变量。
@@ -418,7 +419,7 @@ aab: ## 查看 AAB 安装包信息（AAB_FILE 必填；AAB_VERBOSE 输出全部�
 release-sync-help: ## 同步 Git 发布帮助文档
 	node src/publish-apk.js release-sync --help
 
-release-sync: ## 同步 Git 发布（RELEASE_SYNC_SOURCE / RELEASE_SYNC_TARGET 必填；令牌用 CNB_* / GITEE_* / GITHUB_* / GITCODE_* / GITLAB_* / GITLINK_* 环境变量；RELEASE_SYNC_ARGS 传 --tag / --dry-run 等）
+release-sync: ## 同步 Git 发布（RELEASE_SYNC_SOURCE / RELEASE_SYNC_TARGET 必填；令牌用 CNB_* / GITEE_* / GITHUB_* / GITCODE_* / GITLAB_* / GITLINK_* 环境变量；目标为 GitLab 时需 RELEASE_SYNC_PACKAGE_NAME；RELEASE_SYNC_ARGS 传 --tag / --dry-run 等）
 	@node src/publish-apk.js release-sync $(RELEASE_SYNC_OPTIONS) $(RELEASE_SYNC_ARGS)
 
 # ------------------------------------------------------- Android keystore

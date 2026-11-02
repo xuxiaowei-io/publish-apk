@@ -554,9 +554,10 @@ CNB_SOURCE_TOKEN=<CNB令牌> GITHUB_TARGET_TOKEN=<GitHub令牌> \
 CNB_SOURCE_TOKEN=<CNB令牌> GITCODE_TARGET_TOKEN=<GitCode令牌> \
   publish-apk release-sync --source org/source --target gitcode.com/owner/repo --tag v1.0.0
 
-# 同步到 GitLab（Release 不能传文件，直接生成下载表格）
+# 同步到 GitLab（上传 Generic Package Registry，再创建 Release Link）
 CNB_SOURCE_TOKEN=<CNB令牌> GITLAB_TARGET_TOKEN=<GitLab令牌> \
-  publish-apk release-sync --source org/source --target gitlab.com/group/project --tag v1.0.0
+  publish-apk release-sync --source org/source --target gitlab.com/group/project --tag v1.0.0 \
+    --package-name release-sync
 
 # 同步到 GitLink（先 POST /attachments.json，再用 attachment_ids 关联发布）
 CNB_SOURCE_TOKEN=<CNB令牌> GITLINK_TARGET_TOKEN=<GitLink令牌> \
@@ -578,6 +579,7 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 | `--target-token <令牌>` | `RELEASE_SYNC_TARGET_TOKEN` / `CNB_TARGET_TOKEN` / `CNB_TOKEN` / `GITEE_TARGET_TOKEN` / `GITEE_TOKEN` / `GITHUB_TARGET_TOKEN` / `GITHUB_TOKEN` / `GITCODE_TARGET_TOKEN` / `GITCODE_TOKEN` / `GITLAB_TARGET_TOKEN` / `GITLAB_TOKEN` / `GITLINK_TARGET_TOKEN` / `GITLINK_TOKEN` | 目标仓库令牌（需要写权限） |
 | `--source-api-base <地址>` | `RELEASE_SYNC_SOURCE_API_BASE` / `CNB_SOURCE_API_BASE` / `CNB_API_BASE` / `GITEE_SOURCE_API_BASE` / `GITEE_API_BASE` / `GITHUB_SOURCE_API_BASE` / `GITHUB_API_BASE` / `GITHUB_API_URL` / `GITCODE_SOURCE_API_BASE` / `GITCODE_API_BASE` / `GITLAB_SOURCE_API_BASE` / `GITLAB_API_BASE` / `GITLINK_SOURCE_API_BASE` / `GITLINK_API_BASE` | 源平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` / GitHub `https://api.github.com` / GitCode `https://api.gitcode.com/api/v5` / GitLab `https://gitlab.com/api/v4` / GitLink `https://www.gitlink.org.cn/api` |
 | `--target-api-base <地址>` | `RELEASE_SYNC_TARGET_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` / `GITEE_TARGET_API_BASE` / `GITEE_API_BASE` / `GITHUB_TARGET_API_BASE` / `GITHUB_API_BASE` / `GITHUB_API_URL` / `GITCODE_TARGET_API_BASE` / `GITCODE_API_BASE` / `GITLAB_TARGET_API_BASE` / `GITLAB_API_BASE` / `GITLINK_TARGET_API_BASE` / `GITLINK_API_BASE` | 目标平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` / GitHub `https://api.github.com` / GitCode `https://api.gitcode.com/api/v5` / GitLab `https://gitlab.com/api/v4` / GitLink `https://www.gitlink.org.cn/api` |
+| `--package-name <名称>` | `RELEASE_SYNC_PACKAGE_NAME` / `GITLAB_PACKAGE_NAME` / `GITLAB_TARGET_PACKAGE_NAME` | **目标为 GitLab 时必填**：Generic Package Registry 的软件包名；版本使用发布 tag |
 | `--dry-run` | — | 只读取源发布与目标状态并打印计划（含待删除的附件），不产生写请求 |
 | `--verbose` | `RELEASE_SYNC_VERBOSE` | 输出详细日志（接口地址、发布 ID、hash 校验结果等） |
 
@@ -604,7 +606,7 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 | Gitee 令牌 | 私人访问令牌（`projects` 读写） | 发布 / 标签 / 附件读取；目标为 Gitee 时不尝试上传附件 |
 | GitHub 令牌 | Contents 读写（fine-grained）或 `repo`（classic） | 发布 / 标签 / 附件读写；源仓库只需读 |
 | GitCode 令牌 | 仓库 / 发布读写权限 | 发布 / 标签 / 附件读写；源仓库只需读 |
-| GitLab 令牌 | `api` / `write_repository` | 发布 / 标签 / Release Links；源仓库只需读 |
+| GitLab 令牌 | `api`（含 Package Registry 写权限） | 发布 / 标签 / Generic Package / Release Links；源仓库只需读 |
 | GitLink 令牌 | 仓库 / 发布写权限 | 发布 / 标签 / 附件上传 / 下载 |
 
 - 目标标签不存在时创建标签：CNB 用 `POST /{repo}/-/git/tags`（`target` 取目标分支，轻量标签）；
@@ -635,11 +637,12 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
   再 PUT 文件；同名附件先删后传，digest 一致时跳过，目标多余附件在最后删除。
 - GitCode 的 Release 路径按 **tag** 操作（更新 / 删除附件 / 下载），且 Release 可能不返回 `id`；
   同步层自动用 tag 作为标识。GitCode 的自动源码包（`type=source`）会被忽略，不当作发布产物。
-- **GitLab 目标也走下载表格**：GitLab Release 原生只有 `assets.links`（链接）和 `assets.sources`
-  （自动源码包），不能上传任意附件。目标为 GitLab 时不下载 / 不上传，直接生成 Markdown 表格；
-  GitLab 目标已有的 Release Link 视为发布者内容，保留不删（可能是文档等非产物链接）。
-- 源为 GitLab 时，`assets.links` 会被当作发布产物；链接可下载时再上传到 CNB / GitHub / GitCode，
-  目标为 GitLab / Gitee 时只写表格链接。`assets.sources` 自动源码包忽略。
+- **GitLab 目标上传到 Generic Package Registry**：先
+  `PUT /projects/:id/packages/generic/release-sync/:tag/:file`，再创建指向该文件的 Release Link。
+  同名 package file 先删除再上传，避免 GitLab 同版本重复上传变成追加；只清理 release-sync
+  管理的 package 链接，手工添加的其它 Release Link 保留。
+- 源为 GitLab 时，`assets.links` 会被当作发布产物；链接可下载时再上传到 CNB / GitHub / GitCode /
+  GitLink / GitLab，目标为 Gitee 时只写表格链接。`assets.sources` 自动源码包忽略。
 - **GitLink 目标正常上传附件**：先 `POST /api/attachments.json`（multipart `file`）拿附件 ID，
   再用 `attachment_ids` 把附件关联到 Release；同名附件先移出关联再加入新 ID。
   源为 GitLink 时读取 `attachments`，附件可下载时再上传到 CNB / GitHub / GitCode。
@@ -1590,6 +1593,7 @@ publish-apk huawei service-account-upload-url
 | `RELEASE_SYNC_TARGET_TOKEN` | `--target-token` | 目标仓库令牌；未设置时按平台读 `CNB_TARGET_TOKEN` / `CNB_TOKEN` 或 `GITEE_TARGET_TOKEN` / `GITEE_TOKEN` |
 | `RELEASE_SYNC_SOURCE_API_BASE` | `--source-api-base` | 源平台 API 地址；未设置时按平台读 `CNB_SOURCE_API_BASE` / `CNB_API_BASE`（默认 `https://api.cnb.cool`）或 `GITEE_SOURCE_API_BASE` / `GITEE_API_BASE`（默认 `https://gitee.com/api/v5`） |
 | `RELEASE_SYNC_TARGET_API_BASE` | `--target-api-base` | 目标平台 API 地址；未设置时按平台读 `CNB_TARGET_API_BASE` / `CNB_API_BASE` 或 `GITEE_TARGET_API_BASE` / `GITEE_API_BASE` |
+| `RELEASE_SYNC_PACKAGE_NAME` | `--package-name` | 目标为 GitLab 时必填的软件包名；也可用 `GITLAB_PACKAGE_NAME` / `GITLAB_TARGET_PACKAGE_NAME` |
 | `RELEASE_SYNC_VERBOSE` | `--verbose` | 输出详细日志：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 | `CNB_SOURCE_TOKEN` | — | 源仓库 CNB 访问令牌（`repo-release:r`），`CNB_TOKEN` 的源专用覆盖 |
 | `CNB_TARGET_TOKEN` | — | 目标仓库 CNB 访问令牌（`repo-release:rw`），`CNB_TOKEN` 的目标专用覆盖 |
@@ -1744,7 +1748,8 @@ CNB_SOURCE_TOKEN=... GITCODE_TARGET_TOKEN=... \
     RELEASE_SYNC_TARGET=gitcode.com/owner/repo RELEASE_SYNC_TAG=v1.0.0  # 同步到 GitCode
 CNB_SOURCE_TOKEN=... GITLAB_TARGET_TOKEN=... \
   make release-sync RELEASE_SYNC_SOURCE=org/source \
-    RELEASE_SYNC_TARGET=gitlab.com/group/project RELEASE_SYNC_TAG=v1.0.0  # 同步到 GitLab
+    RELEASE_SYNC_TARGET=gitlab.com/group/project RELEASE_SYNC_TAG=v1.0.0 \
+    RELEASE_SYNC_PACKAGE_NAME=release-sync  # 同步到 GitLab
 CNB_SOURCE_TOKEN=... GITLINK_TARGET_TOKEN=... \
   make release-sync RELEASE_SYNC_SOURCE=org/source \
     RELEASE_SYNC_TARGET=gitlink.org.cn/owner/repo RELEASE_SYNC_TAG=v1.0.0  # 同步到 GitLink
@@ -1775,7 +1780,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`CNB_SOURCE_TOKEN`、`CNB_TARGET_TOKEN`、`CNB_TOKEN`、`CNB_SOURCE_API_BASE`、`CNB_TARGET_API_BASE`、`CNB_API_BASE`、`GITEE_SOURCE_TOKEN`、`GITEE_TARGET_TOKEN`、`GITEE_TOKEN`、`GITEE_SOURCE_API_BASE`、`GITEE_TARGET_API_BASE`、`GITEE_API_BASE`、`GITHUB_SOURCE_TOKEN`、`GITHUB_TARGET_TOKEN`、`GITHUB_TOKEN`、`GITHUB_SOURCE_API_BASE`、`GITHUB_TARGET_API_BASE`、`GITHUB_API_BASE`、`GITHUB_API_URL`、`GITHUB_SOURCE_UPLOAD_BASE`、`GITHUB_TARGET_UPLOAD_BASE`、`GITHUB_UPLOAD_BASE`、`GITCODE_SOURCE_TOKEN`、`GITCODE_TARGET_TOKEN`、`GITCODE_TOKEN`、`GITCODE_SOURCE_API_BASE`、`GITCODE_TARGET_API_BASE`、`GITCODE_API_BASE`、`GITLAB_SOURCE_TOKEN`、`GITLAB_TARGET_TOKEN`、`GITLAB_TOKEN`、`GITLAB_SOURCE_API_BASE`、`GITLAB_TARGET_API_BASE`、`GITLAB_API_BASE`、`GITLINK_SOURCE_TOKEN`、`GITLINK_TARGET_TOKEN`、`GITLINK_TOKEN`、`GITLINK_SOURCE_API_BASE`、`GITLINK_TARGET_API_BASE`、`GITLINK_API_BASE`、`RELEASE_SYNC_SOURCE_TOKEN`、`RELEASE_SYNC_TARGET_TOKEN`、`RELEASE_SYNC_SOURCE_API_BASE`、`RELEASE_SYNC_TARGET_API_BASE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`CNB_SOURCE_TOKEN`、`CNB_TARGET_TOKEN`、`CNB_TOKEN`、`CNB_SOURCE_API_BASE`、`CNB_TARGET_API_BASE`、`CNB_API_BASE`、`GITEE_SOURCE_TOKEN`、`GITEE_TARGET_TOKEN`、`GITEE_TOKEN`、`GITEE_SOURCE_API_BASE`、`GITEE_TARGET_API_BASE`、`GITEE_API_BASE`、`GITHUB_SOURCE_TOKEN`、`GITHUB_TARGET_TOKEN`、`GITHUB_TOKEN`、`GITHUB_SOURCE_API_BASE`、`GITHUB_TARGET_API_BASE`、`GITHUB_API_BASE`、`GITHUB_API_URL`、`GITHUB_SOURCE_UPLOAD_BASE`、`GITHUB_TARGET_UPLOAD_BASE`、`GITHUB_UPLOAD_BASE`、`GITCODE_SOURCE_TOKEN`、`GITCODE_TARGET_TOKEN`、`GITCODE_TOKEN`、`GITCODE_SOURCE_API_BASE`、`GITCODE_TARGET_API_BASE`、`GITCODE_API_BASE`、`GITLAB_SOURCE_TOKEN`、`GITLAB_TARGET_TOKEN`、`GITLAB_TOKEN`、`GITLAB_SOURCE_API_BASE`、`GITLAB_TARGET_API_BASE`、`GITLAB_API_BASE`、`GITLINK_SOURCE_TOKEN`、`GITLINK_TARGET_TOKEN`、`GITLINK_TOKEN`、`GITLINK_SOURCE_API_BASE`、`GITLINK_TARGET_API_BASE`、`GITLINK_API_BASE`、`RELEASE_SYNC_SOURCE_TOKEN`、`RELEASE_SYNC_TARGET_TOKEN`、`RELEASE_SYNC_SOURCE_API_BASE`、`RELEASE_SYNC_TARGET_API_BASE`、`RELEASE_SYNC_PACKAGE_NAME`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -1846,7 +1851,11 @@ make pack-check                                  # 查看 npm 发布物内容（
 
 - Project release API（发布创建 / 更新 / 查询）：
   <https://docs.gitlab.com/api/releases/>
-- Release links API（发布链接；GitLab 没有任意附件上传）：
+- Generic Package Registry（通用包上传）：
+  <https://docs.gitlab.com/user/packages/generic_packages/>
+- Packages API（包文件删除 / 列表）：
+  <https://docs.gitlab.com/api/packages/>
+- Release links API（发布链接）：
   <https://docs.gitlab.com/api/releases/links/>
 - Tags API（标签查询 / 创建）：
   <https://docs.gitlab.com/api/tags/>

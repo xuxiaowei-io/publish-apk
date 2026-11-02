@@ -4,15 +4,23 @@
  * GitLab Release 的 assets 只有：
  *   - sources：GitLab 自动生成的源码包；
  *   - links：发布者手工添加的「发布链接」（可指向任意 URL）。
- * GitLab 不支持往 Release 直接上传任意附件，因此目标为 GitLab 时走「下载表格」模式：
- * 不下载、不上传，只把源发布附件的下载地址写入发布说明。
+ * GitLab 不能往 Release 直接上传附件，但可以把文件发布到 Generic Package Registry：
+ *   PUT /projects/:id/packages/generic/release-sync/:tag/:file
+ * 然后给 Release 创建指向通用包地址的 Release Link。目标为 GitLab 时走这条路径。
  *
  * 用到的接口：
  *   GET   /projects/{id}/releases/{tag_name}
  *   GET   /projects/{id}/releases
  *   POST  /projects/{id}/releases
  *   PUT   /projects/{id}/releases/{tag_name}
+ *   GET   /projects/{id}/releases/{tag_name}/assets/links
+ *   POST  /projects/{id}/releases/{tag_name}/assets/links
+ *   PUT   /projects/{id}/releases/{tag_name}/assets/links/{link_id}
  *   DELETE /projects/{id}/releases/{tag_name}/assets/links/{link_id}
+ *   PUT   /projects/{id}/packages/generic/release-sync/{tag}/{file}
+ *   GET   /projects/{id}/packages?package_type=generic
+ *   GET   /projects/{id}/packages/{package_id}/package_files
+ *   DELETE /projects/{id}/packages/{package_id}/package_files/{package_file_id}
  *   GET   /projects/{id}/repository/tags/{tag_name}
  *   POST  /projects/{id}/repository/tags
  *   GET   /projects/{id}                                  仓库信息（默认分支）
@@ -21,12 +29,12 @@
  * id 使用 URL 编码的完整项目路径，支持 group/subgroup/project。
  *
  * 源为 GitLab 时，assets.links 会被当作「可下载链接」参与同步：
- *   - 目标为 GitLab / Gitee：只把链接写进表格，不下载；
- *   - 目标为 CNB / GitHub / GitCode：下载链接再上传为实际附件。
+ *   - 目标为 Gitee：只把链接写进表格，不下载；
+ *   - 目标为 CNB / GitHub / GitCode / GitLink / GitLab：下载链接再上传为实际附件。
  * 注意 links 可能指向网页而非二进制文件，源链接是否可直接下载由发布者负责。
  */
 import { createHash } from 'node:crypto'
-import { createWriteStream } from 'node:fs'
+import { createReadStream, createWriteStream } from 'node:fs'
 import { stat } from 'node:fs/promises'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
@@ -41,6 +49,9 @@ export const GITLAB_HOSTS = new Set(['gitlab.com', 'www.gitlab.com'])
 export const GITLAB_DEFAULT_HOST = 'gitlab.com'
 /** 默认 API 地址 */
 export const GITLAB_DEFAULT_API_BASE = 'https://gitlab.com/api/v4'
+
+/** 通用软件包（Generic Package）使用的包名；版本使用 Release tag */
+export const GITLAB_PACKAGE_NAME = 'release-sync'
 
 const USER_AGENT = 'publish-apk'
 const ACCEPT = 'application/json'
@@ -250,6 +261,7 @@ class GitlabReleaseClient {
     repo,
     token,
     apiBase = GITLAB_DEFAULT_API_BASE,
+    packageName = GITLAB_PACKAGE_NAME,
     fetchImpl = fetch,
     requestTimeoutMs = REQUEST_TIMEOUT_MS,
     transferTimeoutMs = TRANSFER_TIMEOUT_MS,
@@ -270,6 +282,14 @@ class GitlabReleaseClient {
     this.fetchImpl = fetchImpl
     this.requestTimeoutMs = requestTimeoutMs
     this.transferTimeoutMs = transferTimeoutMs
+    this.projectInfo = undefined
+    if (typeof packageName !== 'string' || packageName.trim() === '') {
+      throw new Error('GitlabReleaseClient 需要软件包名')
+    }
+    if (/\s/.test(packageName.trim())) {
+      throw new Error(`GitLab 软件包名不能包含空白字符: ${packageName}`)
+    }
+    this.packageName = packageName.trim()
   }
 
   /** /projects/{urlencoded-path}... */
@@ -420,9 +440,135 @@ class GitlabReleaseClient {
   }
 
   /** 项目默认分支 */
+  async getProject() {
+    if (this.projectInfo === undefined) {
+      this.projectInfo = await this.request('')
+    }
+    return this.projectInfo
+  }
+
   async getDefaultBranch() {
-    const project = await this.request('')
+    const project = await this.getProject()
     return typeof project?.default_branch === 'string' ? project.default_branch : undefined
+  }
+
+  /** 通用软件包页面地址（Release Link 指向它） */
+  async packageFileUrl(tag, fileName) {
+    const project = await this.getProject()
+    const webBase =
+      typeof project?.web_url === 'string' && project.web_url !== ''
+        ? project.web_url.replace(/\/+$/, '')
+        : `${this.apiBase.replace(/\/api\/v4$/, '')}/${this.repo}`
+    return (
+      `${webBase}/-/packages/generic/${encodeURIComponent(this.packageName)}` +
+      `/${encodeURIComponent(String(tag))}/${encodeURIComponent(fileName)}`
+    )
+  }
+
+  /** 列出某个 tag 对应的通用包及其文件 */
+  async getPackageFiles(tag) {
+    const packages = await this.request('/packages', {
+      params: {
+        package_type: 'generic',
+        package_name: this.packageName,
+        package_version: String(tag),
+        per_page: 100,
+      },
+    })
+    const matched = (Array.isArray(packages) ? packages : []).filter(
+      (item) =>
+        item?.name === this.packageName && String(item?.version) === String(tag),
+    )
+    const files = []
+    for (const pkg of matched) {
+      const list = await this.request(
+        `/packages/${encodeURIComponent(String(pkg.id))}/package_files`,
+        { params: { per_page: 100 } },
+      )
+      for (const file of Array.isArray(list) ? list : []) {
+        files.push({ ...file, package_id: pkg.id })
+      }
+    }
+    return files
+  }
+
+  /** 删除同名 package file；GitLab 同版本重复上传是追加而非覆盖 */
+  async deletePackageFileByName(tag, fileName) {
+    const files = await this.getPackageFiles(tag)
+    for (const file of files) {
+      if (file.file_name !== fileName) {
+        continue
+      }
+      try {
+        await this.request(
+          `/packages/${encodeURIComponent(String(file.package_id))}/package_files/${encodeURIComponent(String(file.id))}`,
+          { method: 'DELETE' },
+        )
+      } catch (error) {
+        if (!isGitlabNotFound(error)) {
+          throw error
+        }
+      }
+    }
+  }
+
+  /** 上传文件到 Generic Package Registry */
+  async uploadPackageFile(tag, fileName, filePath, contentType) {
+    const { size } = await stat(filePath)
+    const url = this.apiUrl(
+      `/packages/generic/${encodeURIComponent(this.packageName)}/${encodeURIComponent(String(tag))}/${encodeURIComponent(fileName)}`,
+    )
+    const init = {
+      method: 'PUT',
+      headers: {
+        Accept: ACCEPT,
+        'PRIVATE-TOKEN': this.token,
+        'User-Agent': USER_AGENT,
+        'Content-Type':
+          typeof contentType === 'string' && contentType !== ''
+            ? contentType
+            : 'application/octet-stream',
+        'Content-Length': String(size),
+      },
+      signal: AbortSignal.timeout(this.transferTimeoutMs),
+    }
+    if (size === 0) {
+      init.body = Buffer.alloc(0)
+    } else {
+      init.body = Readable.toWeb(createReadStream(filePath))
+      init.duplex = 'half'
+    }
+    let response
+    try {
+      response = await this.fetchImpl(url, init)
+    } catch (error) {
+      throw describeNetworkError('PUT', url, error)
+    }
+    const text = await response.text()
+    if (!response.ok) {
+      throw describeResponseError(response, undefined, text, 'PUT', url)
+    }
+    return { url }
+  }
+
+  /** 创建 / 更新 Release Link，使其指向通用包的下载地址 */
+  async upsertReleaseLink(tag, name, url) {
+    const links = await this.request(
+      `/releases/${encodeURIComponent(String(tag))}/assets/links`,
+    )
+    const existing = (Array.isArray(links) ? links : []).find(
+      (item) => item?.name === name,
+    )
+    if (existing !== undefined) {
+      return this.request(
+        `/releases/${encodeURIComponent(String(tag))}/assets/links/${encodeURIComponent(String(existing.id))}`,
+        { method: 'PUT', body: { name, url, link_type: 'package' } },
+      )
+    }
+    return this.request(
+      `/releases/${encodeURIComponent(String(tag))}/assets/links`,
+      { method: 'POST', body: { name, url, link_type: 'package' } },
+    )
   }
 
   /** 创建发布 */
@@ -469,20 +615,23 @@ class GitlabReleaseClient {
     return normalizeRelease(merged, { latestTag })
   }
 
-  /** 删除目标 Release 的附件链接（表格模式清理多余链接） */
-  async deleteAsset(releaseId, assetId, { tag } = {}) {
+  /** 删除目标 Release Link，并尽量清理同名 package file */
+  async deleteAsset(releaseId, assetId, { tag, assetName } = {}) {
     const releaseTag = tag ?? releaseId
     try {
-      return await this.request(
+      await this.request(
         `/releases/${encodeURIComponent(String(releaseTag))}/assets/links/${encodeURIComponent(String(assetId))}`,
         { method: 'DELETE' },
       )
     } catch (error) {
-      if (isGitlabNotFound(error)) {
-        return { alreadyDeleted: true }
+      if (!isGitlabNotFound(error)) {
+        throw error
       }
-      throw error
     }
+    if (typeof assetName === 'string' && assetName !== '') {
+      await this.deletePackageFileByName(releaseTag, assetName)
+    }
+    return { deleted: true }
   }
 
   /** 下载 GitLab Release link 指向的地址 */
@@ -584,9 +733,20 @@ class GitlabReleaseClient {
     return { size }
   }
 
-  /** GitLab Release 不支持直接上传附件，目标为 GitLab 时编排层走表格模式 */
-  async uploadAsset() {
-    throw new Error('GitLab Release 不支持直接上传附件；请使用下载表格模式')
+  /**
+   * 上传附件到 GitLab Generic Package Registry，并创建 / 更新 Release Link：
+   *   PUT /projects/:id/packages/generic/release-sync/:tag/:file
+   *   POST /projects/:id/releases/:tag/assets/links
+   */
+  async uploadAsset(releaseId, assetName, filePath, { contentType, tag } = {}) {
+    const releaseTag = tag ?? releaseId
+    if (releaseTag === undefined || releaseTag === null || releaseTag === '') {
+      throw new Error(`上传附件 ${assetName} 失败: 缺少发布 tag`)
+    }
+    await this.deletePackageFileByName(releaseTag, assetName)
+    await this.uploadPackageFile(releaseTag, assetName, filePath, contentType)
+    const url = await this.packageFileUrl(releaseTag, assetName)
+    return this.upsertReleaseLink(releaseTag, assetName, url)
   }
 }
 
@@ -598,13 +758,19 @@ export const gitlabReleaseProvider = {
   defaultHost: GITLAB_DEFAULT_HOST,
   tokenEnvs: GITLAB_TOKEN_ENVS,
   apiBaseEnvs: GITLAB_API_BASE_ENVS,
-  // GitLab Release 只有 links/sources，不能上传任意文件；直接生成下载表格
-  assetUploadDirectToTable: true,
-  // Release Links 可能是文档等非产物链接，保留目标现有链接，不做“多余附件删除”
-  preserveTargetAssets: true,
+  // GitLab 目标上传到 Generic Package Registry，再创建 Release Link。
+  // 只清理 release-sync 管理的 package 链接，保留手工添加的其它链接。
   supportsDraft: false,
   supportsPrerelease: false,
   supportsMakeLatest: false,
+  isManagedAsset(asset) {
+    return (
+      asset?.link_type === 'package' ||
+      (typeof asset?.url === 'string' && asset.url.includes('/-/packages/generic/')) ||
+      (typeof asset?.browser_download_url === 'string' &&
+        asset.browser_download_url.includes('/-/packages/generic/'))
+    )
+  },
   resolveToken: resolveGitlabToken,
   resolveApiBase: resolveGitlabApiBase,
   createClient(options) {
