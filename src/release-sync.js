@@ -89,6 +89,8 @@ const OPTION_SOURCE_API_BASE = '--source-api-base'
 const OPTION_TARGET_API_BASE = '--target-api-base'
 /** 目标为 GitLab 时必填：Generic Package Registry 的软件包名 */
 const OPTION_PACKAGE_NAME = '--package-name'
+/** 覆盖目标发布的 make_latest（true / false） */
+const OPTION_MAKE_LATEST = '--make-latest'
 /** 开关：只打印计划，不写入目标 */
 const OPTION_DRY_RUN = '--dry-run'
 /** 开关：输出详细日志 */
@@ -105,6 +107,7 @@ const SYNC_OPTIONS = new Set([
   OPTION_SOURCE_API_BASE,
   OPTION_TARGET_API_BASE,
   OPTION_PACKAGE_NAME,
+  OPTION_MAKE_LATEST,
   OPTION_DRY_RUN,
   OPTION_VERBOSE,
 ])
@@ -120,6 +123,7 @@ const ENV_TARGET_TOKEN = 'RELEASE_SYNC_TARGET_TOKEN'
 const ENV_SOURCE_API_BASE = 'RELEASE_SYNC_SOURCE_API_BASE'
 const ENV_TARGET_API_BASE = 'RELEASE_SYNC_TARGET_API_BASE'
 const ENV_PACKAGE_NAME = 'RELEASE_SYNC_PACKAGE_NAME'
+const ENV_MAKE_LATEST = 'RELEASE_SYNC_MAKE_LATEST'
 const ENV_VERBOSE = 'RELEASE_SYNC_VERBOSE'
 
 /** 默认目标分支：CNB 仓库的默认分支通常是 main */
@@ -320,6 +324,24 @@ function optionOrEnv(options, env, option, envName) {
   return readEnv(env, envName)
 }
 
+/** --make-latest 的取值校验：true / false */
+function resolveMakeLatest(value) {
+  if (value === undefined) {
+    return undefined
+  }
+  const text = String(value).trim().toLowerCase()
+  if (VERBOSE_ON_VALUES.has(text)) {
+    return true
+  }
+  if (VERBOSE_OFF_VALUES.has(text)) {
+    return false
+  }
+  throw new UsageError(
+    `${OPTION_MAKE_LATEST} 只能是 true / false，实际: "${value}"`,
+    renderReleaseSyncHelp(),
+  )
+}
+
 /** RELEASE_SYNC_VERBOSE 的取值校验：开关型环境变量必须能明确表达开 / 关 */
 function resolveVerbose(options, env, help) {
   if (options.get(OPTION_VERBOSE) === true) {
@@ -442,6 +464,10 @@ function renderReleaseSyncHelp() {
             `${OPTION_PACKAGE_NAME} <名称>`,
             `目标为 GitLab 时必填：Generic Package Registry 的软件包名；版本使用发布 tag。也可用 ${ENV_PACKAGE_NAME} / GITLAB_PACKAGE_NAME 补齐`,
           ],
+          [
+            `${OPTION_MAKE_LATEST} <true|false>`,
+            `覆盖目标发布的 make_latest；目标为 GitHub / CNB 时生效。不传则按源发布 is_latest；也可用 ${ENV_MAKE_LATEST} 补齐`,
+          ],
           [OPTION_DRY_RUN, '只读取源发布与目标状态并打印计划，不创建标签 / 发布、不上传或删除附件'],
           [OPTION_VERBOSE, `输出详细日志（含接口地址、发布 ID、校验结果）；也可用 ${ENV_VERBOSE}`],
           ['-h, --help', '显示帮助信息'],
@@ -465,6 +491,7 @@ function renderReleaseSyncHelp() {
           [ENV_SOURCE_API_BASE, `源平台 API 地址，等价于 ${OPTION_SOURCE_API_BASE}`],
           [ENV_TARGET_API_BASE, `目标平台 API 地址，等价于 ${OPTION_TARGET_API_BASE}`],
           [ENV_PACKAGE_NAME, `目标为 GitLab 时的软件包名，等价于 ${OPTION_PACKAGE_NAME}；也可用 GITLAB_PACKAGE_NAME`],
+          [ENV_MAKE_LATEST, `覆盖目标发布 make_latest，等价于 ${OPTION_MAKE_LATEST}（true / false）`],
           [ENV_VERBOSE, '输出详细日志，1/true/yes/on 开启、0/false/no/off 关闭，等价于 --verbose'],
           ['CNB_SOURCE_TOKEN / CNB_TARGET_TOKEN / CNB_TOKEN', 'CNB 平台令牌；源与目标可用同一个 CNB_TOKEN'],
           ['CNB_SOURCE_API_BASE / CNB_TARGET_API_BASE / CNB_API_BASE', 'CNB API 地址；CNB_API_BASE 对源与目标都生效'],
@@ -506,7 +533,7 @@ function renderReleaseSyncHelp() {
           ['草稿 / 预发布', '按源发布原样同步；draft 发布同样会搬运附件'],
           ['安全兜底', '源发布响应没有附件列表时，跳过“删除目标多余附件”，避免误删'],
           ['Gitee 附件', '目标为 Gitee 时默认不下载 / 不上传产物，直接在发布说明生成 Markdown 下载表格'],
-          ['GitHub 附件', '正常下载 / 上传；.app 先打包为 .app.zip；asset digest 用于 SHA 跳过或替换'],
+          ['GitHub 附件', '正常下载 / 上传；.app 先打包为 .app.zip；是否 latest 由 --make-latest 控制'],
           ['GitCode 附件', '正常下载 / 上传；先取 upload_url 再 PUT；digest 用于 SHA 跳过或替换，同名先删后传'],
           ['GitLab 附件', '上传到 Generic Package Registry（release-sync/:tag/:file），再创建 Release Link'],
           ['GitLink 附件', '正常下载 / 上传；先 POST /attachments.json 拿附件 ID，再用 attachment_ids 关联发布'],
@@ -571,6 +598,7 @@ function renderReleaseSyncHelp() {
       '  - 附件先下载到系统临时目录，再流式上传；结束后自动清理临时文件。',
       '  - 重跑时同名附件先比 SHA：一致跳过、不一致覆盖；目标多出的附件会被删除。',
       '  - 目标为 GitLab 时必须用 --package-name 指定 Generic Package 名称；附件上传到 Package Registry 后创建 Release Links。',
+      '  - 目标为 GitHub 时可用 --make-latest true|false 控制是否设为 latest；不传则按源发布 is_latest。',
       '  - 目标为 Gitee 时默认跳过附件下载 / 上传，直接在发布说明中生成 Markdown 下载表格。',
     ],
   })
@@ -1010,6 +1038,16 @@ async function runReleaseSync(argv, env) {
     )
   }
 
+  const makeLatestOverride = resolveMakeLatest(
+    options.get(OPTION_MAKE_LATEST) ?? readEnv(env, ENV_MAKE_LATEST),
+  )
+  if (makeLatestOverride !== undefined && target.provider.supportsMakeLatest === false) {
+    throw new UsageError(
+      `目标平台 ${target.provider.label} 不支持 ${OPTION_MAKE_LATEST}`,
+      renderReleaseSyncHelp(),
+    )
+  }
+
   const sourceToken = resolveSyncToken(options, env, 'source', source.provider)
   const targetToken = resolveSyncToken(options, env, 'target', target.provider)
   const missingTokens = []
@@ -1127,6 +1165,10 @@ async function runReleaseSync(argv, env) {
   if (typeof sourceRelease.is_latest === 'boolean') {
     // 显式传 true / false：避免目标平台按创建时间默认把旧版本设成最新
     releaseFields.make_latest = sourceRelease.is_latest ? 'true' : 'false'
+  }
+  // 参数显式覆盖目标发布的 latest；不传时保持源发布 is_latest。
+  if (makeLatestOverride !== undefined) {
+    releaseFields.make_latest = makeLatestOverride ? 'true' : 'false'
   }
   // 目标平台不支持 draft / make_latest 时不要把字段放进比较和 PATCH
   if (target.provider.supportsDraft === false) {

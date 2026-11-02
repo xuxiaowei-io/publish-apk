@@ -118,7 +118,7 @@ async function startMock() {
             body: '## CNB 源说明',
             draft: false,
             prerelease: false,
-            is_latest: true,
+            is_latest: false,
             assets: [
               {
                 id: 'cnb-asset-1',
@@ -330,6 +330,8 @@ const ARGS = (base) => [
   base,
   '--target-api-base',
   base,
+  '--make-latest',
+  'true',
 ]
 
 const TOKENS = {
@@ -416,6 +418,30 @@ const TOKENS = {
     resolveGithubUploadBase({}, 'target', 'http://127.0.0.1:1234'),
     'http://127.0.0.1:1234',
   )
+}
+
+// --make-latest 非法值应直接报参数错误
+{
+  const invalid = await runCli(
+    [
+      'release-sync',
+      '--source',
+      `https://cnb.cool/${SOURCE_REPO}`,
+      '--target',
+      `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}`,
+      '--tag',
+      TAG,
+      '--make-latest',
+      'maybe',
+      '--source-token',
+      'x',
+      '--target-token',
+      'y',
+    ],
+    {},
+  )
+  assert.equal(invalid.code, 1)
+  assert.match(invalid.stderr, /--make-latest 只能是 true \/ false/)
 }
 
 console.log('release-sync: CNB 源 → GitHub 目标测试通过')
