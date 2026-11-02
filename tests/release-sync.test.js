@@ -867,7 +867,8 @@ const TOKEN_ENV = {
   ])
   assert.equal(unsupported.code, 1)
   assert.match(unsupported.stderr, /暂不支持 github\.com/)
-  assert.match(unsupported.stderr, /Gitee \/ GitHub/)
+  assert.match(unsupported.stderr, /GitHub 等平台/)
+  assert.match(unsupported.stderr, /gitee\.com/)
 
   const missingToken = await runCli([
     'release-sync',

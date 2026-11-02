@@ -6,7 +6,7 @@
 `keystore`（校验 Android 签名密钥库的口令 / 别名，BASE64 可落盘）、`keystore-env`（导出 CI 变量）、
 `keystore-config`（由 BASE64 / 变量生成 `keystore.properties`）与 `keystore-gen`（快速生成密钥库）。
 Git 发布同步用 `release-sync`：把一个仓库的 Release（发布说明 + 附件）同步到另一个仓库，
-目标标签不存在时按分支创建、目标多余附件按源清理；目前支持 CNB（cnb.cool），并已为 Gitee / GitHub 预留适配器接口。
+目标标签不存在时按分支创建、目标多余附件按源清理；目前支持 CNB（cnb.cool）与 Gitee（gitee.com），GitHub 适配器后续加入。
 华为侧另有 `huawei signing-config`，用 `.cer` / `.p7b` / `.p12` 与明文口令生成 `build-profile.json5` 的签名配置。
 
 - 纯 Node.js 实现，**无任何 npm 第三方依赖**（Node 内置模块；查看 PKCS#12 时调用系统 `openssl`，
@@ -512,7 +512,7 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 ### release-sync（同步 Git 发布）
 
 把一个仓库的 Release（**源**）同步到另一个仓库的 Release（**目标**）。
-目前实现 **CNB（cnb.cool）→ CNB**；平台适配器接口已按「以后接 Gitee / GitHub」的形状预留，见本节末尾。
+目前支持 **CNB（cnb.cool）↔ Gitee（gitee.com）** 互相同步；GitHub 适配器接口已预留，见本节末尾。
 
 同步内容包括：
 
@@ -542,6 +542,10 @@ publish-apk release-sync --source org/source --target org/target \
 # 只读取并打印计划，不写入目标（不建标签 / 发布，也不上传 / 删除附件）
 publish-apk release-sync --source org/source --target org/target --tag v1.0.0 --dry-run
 
+# 同步到 Gitee（目标标签默认优先用 Gitee 仓库默认分支）
+CNB_SOURCE_TOKEN=<CNB令牌> GITEE_TARGET_TOKEN=<Gitee令牌> \
+  publish-apk release-sync --source org/source --target gitee.com/owner/repo --tag v1.0.0
+
 # 令牌只走环境变量，避免进入 ps / shell 历史
 CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
   publish-apk release-sync --source org/source --target org/target --tag v1.0.0
@@ -553,11 +557,11 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 | `--target <仓库>` | `RELEASE_SYNC_TARGET` | 目标仓库（接收发布与附件），**必填** |
 | `--tag <标签>` | `RELEASE_SYNC_TAG` | 要同步的发布标签；不给时同步最新发布 |
 | `--latest` | — | 明确同步最新发布；与 `--tag` 互斥，两者都不给时默认最新 |
-| `--target-branch <分支>` | `RELEASE_SYNC_TARGET_BRANCH` | 目标标签不存在时基于哪个分支创建，默认 `main` |
-| `--source-token <令牌>` | `RELEASE_SYNC_SOURCE_TOKEN` / `CNB_SOURCE_TOKEN` / `CNB_TOKEN` | 源仓库令牌（只读即可） |
-| `--target-token <令牌>` | `RELEASE_SYNC_TARGET_TOKEN` / `CNB_TARGET_TOKEN` / `CNB_TOKEN` | 目标仓库令牌（需要写权限） |
-| `--source-api-base <地址>` | `RELEASE_SYNC_SOURCE_API_BASE` / `CNB_SOURCE_API_BASE` / `CNB_API_BASE` | 源平台 API 地址，默认 `https://api.cnb.cool` |
-| `--target-api-base <地址>` | `RELEASE_SYNC_TARGET_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` | 目标平台 API 地址，默认 `https://api.cnb.cool` |
+| `--target-branch <分支>` | `RELEASE_SYNC_TARGET_BRANCH` | 目标标签不存在时基于哪个分支创建；未指定时优先用目标仓库默认分支（Gitee 可查询），否则 `main` |
+| `--source-token <令牌>` | `RELEASE_SYNC_SOURCE_TOKEN` / `CNB_SOURCE_TOKEN` / `CNB_TOKEN` / `GITEE_SOURCE_TOKEN` / `GITEE_TOKEN` | 源仓库令牌（只读即可） |
+| `--target-token <令牌>` | `RELEASE_SYNC_TARGET_TOKEN` / `CNB_TARGET_TOKEN` / `CNB_TOKEN` / `GITEE_TARGET_TOKEN` / `GITEE_TOKEN` | 目标仓库令牌（需要写权限） |
+| `--source-api-base <地址>` | `RELEASE_SYNC_SOURCE_API_BASE` / `CNB_SOURCE_API_BASE` / `CNB_API_BASE` / `GITEE_SOURCE_API_BASE` / `GITEE_API_BASE` | 源平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` |
+| `--target-api-base <地址>` | `RELEASE_SYNC_TARGET_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` / `GITEE_TARGET_API_BASE` / `GITEE_API_BASE` | 目标平台 API 地址；默认 CNB `https://api.cnb.cool` / Gitee `https://gitee.com/api/v5` |
 | `--dry-run` | — | 只读取源发布与目标状态并打印计划（含待删除的附件），不产生写请求 |
 | `--verbose` | `RELEASE_SYNC_VERBOSE` | 输出详细日志（接口地址、发布 ID、hash 校验结果等） |
 
@@ -566,19 +570,22 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 | 写法 | 说明 |
 | --- | --- |
 | `https://cnb.cool/org/repo` | 完整网页地址，可带 `.git` 后缀 |
+| `https://gitee.com/owner/repo` | Gitee 仓库地址；也可写 `gitee.com/owner/repo` |
 | `cnb.cool/org/repo` | 省略协议 |
 | `git@cnb.cool:org/repo.git` | SCP 风格 SSH 地址 |
-| `org/repo` | 省略 host 时按当前唯一实现的 CNB 处理；组织名可带点，如 `xuxiaowei.io/repo` |
+| `org/repo` | 省略 host 时按 CNB 处理；组织名可带点，如 `xuxiaowei.io/repo`；Gitee 请写清 host |
 
-**CNB 权限与目标标签**：
+**权限与目标标签**：
 
-| 角色 | 访问令牌权限 | 说明 |
+| 角色 | 权限 | 说明 |
 | --- | --- | --- |
-| 源仓库 | `repo-release:r` | 查询发布、下载附件 |
-| 目标仓库 | `repo-release:rw` | 创建标签、创建 / 更新发布、上传 / 确认 / 删除附件 |
+| CNB 源仓库 | `repo-release:r` | 查询发布、下载附件 |
+| CNB 目标仓库 | `repo-release:rw` | 创建标签、创建 / 更新发布、上传 / 确认 / 删除附件 |
+| Gitee 令牌 | 私人访问令牌（`projects` 读写） | 发布 / 标签 / 附件读取；目标为 Gitee 时不尝试上传附件 |
 
-- 目标标签不存在时调用 `POST /{repo}/-/git/tags`，`target` 取 `--target-branch`，创建**轻量标签**；
-  然后创建目标发布（`target_commitish` 同样取该分支）。
+- 目标标签不存在时创建标签：CNB 用 `POST /{repo}/-/git/tags`（`target` 取目标分支，轻量标签）；
+  Gitee 用 `POST /repos/{owner}/{repo}/tags`（`refs` 取目标分支）。
+- Gitee 未显式给 `--target-branch` 时会查询仓库默认分支（例如 `master`），避免默认 `main` 不存在。
 - 目标标签已存在时不会移动它；如需换起点，请先在目标仓库删除该标签再重跑。
 - 目标发布已存在时更新标题 / 说明 / 草稿 / 预发布 / 最新状态；附件按文件名匹配：
   两端 hash（`hash_algo` + `hash_value`）一致且大小不冲突时跳过，否则覆盖上传。
@@ -587,13 +594,34 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
 - 附件先下载到系统临时目录（流式写盘，可选校验 hash / 大小），再流式 PUT 到预签名上传地址；
   预签名上传**不会**携带 CNB 令牌。结束后自动清理临时文件。
 - 目标平台返回的“是否最新”会按源发布同步；同步旧版本时也不会意外把旧版本设成最新。
+- Gitee 的 `assets` 里通常包含自动生成的源码 zip/tar.gz；同步只把 `attach_files` 当作附件，
+  不会误删这些自动源码包。
+- **目标为 Gitee 时默认不下载、不上传产物**：直接把源发布附件生成 Markdown 下载表格，避免大文件
+  白下载，也避开 Gitee 的附件安全拦截（例如 `malicious file detected`）。
+- 表格包含文件、大小、SHA-256（源有 SHA-256 时）与源发布下载地址；带固定隐藏标记，重跑会先删旧表格
+  再生成，不会重复追加；表格里的下载地址会去掉 `access_token`。
+- Gitee 附件没有 SHA 元数据，本实现默认不尝试上传，因此不涉及 Gitee 侧的 SHA 跳过 / 替换。
+
+Gitee 目标生成的下载表格大致如下（带隐藏标记，重跑会替换而不是追加）：
+
+```markdown
+## 发布产物
+
+> 目标平台 Gitee 不支持上传发布附件（源仓库 cnb.cool/org/source），以下文件请从源仓库下载。
+
+| 文件 | 大小 | SHA-256 | 下载 |
+| --- | ---: | --- | --- |
+| app.apk | 12.3 MiB | `abc…` | [下载](<https://cnb.cool/…/app.apk>) |
+```
 
 **输出**：`stdout` 是同步摘要（源 / 目标发布、目标标签、附件上传 / 跳过 / 删除逐项状态），`stderr` 是过程日志与错误；
-令牌不会出现在任何输出里。`--dry-run` 的摘要以 `[dry-run]` 开头。
+令牌不会出现在任何输出里。`--dry-run` 的摘要以 `[dry-run]` 开头。目标为 Gitee 时摘要会明确写
+「目标平台不支持附件上传，已写入发布说明的 Markdown 下载表格」。
 
-**平台扩展**：`src/release-sync.js` 只做编排，平台能力由适配器提供；第一个适配器是
-[src/cnb.js](src/cnb.js)。接 Gitee / GitHub 时照它的形状新增适配器并注册到 `PROVIDERS` 即可，
-命令、选项与摘要格式不需要改。
+**平台扩展**：`src/release-sync.js` 只做编排，平台能力由适配器提供；当前适配器是
+[src/cnb.js](src/cnb.js) 与 [src/gitee.js](src/gitee.js)。接 GitHub 时照它们的形状新增适配器并注册到
+`PROVIDERS` 即可，命令、选项与摘要格式不需要改。目标平台不接受附件上传时，适配器声明
+`assetUploadDirectToTable: true`，编排会直接生成下载表格、不下载源附件（Gitee 就是这样）。
 
 ### huawei 子命令
 
@@ -1501,34 +1529,38 @@ publish-apk huawei service-account-upload-url
 | `GITHUB_REPOSITORY` | `--github-repo` | `owner/repo`；Actions 自动注入；未给 `--github-repo` 时用它 |
 | `GITHUB_API_URL` | — | API 地址，默认 `https://api.github.com`；GitHub Enterprise 用 `https://host/api/v3` |
 
-### Git 发布同步（`RELEASE_SYNC_*` / `CNB_*`）
+### Git 发布同步（`RELEASE_SYNC_*` / `CNB_*` / `GITEE_*`）
 
 只用于 `release-sync`；不会影响其它命令。带值的选项都有环境变量兜底，**命令行选项优先**；
-源与目标的令牌 / API 地址可以分开给，也可以用 `CNB_TOKEN` / `CNB_API_BASE` 让两者共用。
+源与目标的令牌 / API 地址可以分开给，也可以用 `CNB_TOKEN` / `CNB_API_BASE` 或 `GITEE_TOKEN` / `GITEE_API_BASE` 让同平台两者共用。
 
 | 环境变量 | 等价选项 | 说明 |
 | --- | --- | --- |
 | `RELEASE_SYNC_SOURCE` | `--source` | 源仓库，**必填** |
 | `RELEASE_SYNC_TARGET` | `--target` | 目标仓库，**必填** |
 | `RELEASE_SYNC_TAG` | `--tag` | 发布标签；不给时同步最新发布 |
-| `RELEASE_SYNC_TARGET_BRANCH` | `--target-branch` | 目标标签不存在时的起始分支，默认 `main` |
-| `RELEASE_SYNC_SOURCE_TOKEN` | `--source-token` | 源仓库令牌；未设置时依次读 `CNB_SOURCE_TOKEN`、`CNB_TOKEN` |
-| `RELEASE_SYNC_TARGET_TOKEN` | `--target-token` | 目标仓库令牌；未设置时依次读 `CNB_TARGET_TOKEN`、`CNB_TOKEN` |
-| `RELEASE_SYNC_SOURCE_API_BASE` | `--source-api-base` | 源平台 API 地址；未设置时依次读 `CNB_SOURCE_API_BASE`、`CNB_API_BASE`、默认 `https://api.cnb.cool` |
-| `RELEASE_SYNC_TARGET_API_BASE` | `--target-api-base` | 目标平台 API 地址；未设置时依次读 `CNB_TARGET_API_BASE`、`CNB_API_BASE`、默认 `https://api.cnb.cool` |
+| `RELEASE_SYNC_TARGET_BRANCH` | `--target-branch` | 目标标签不存在时的起始分支；未设置时优先用目标仓库默认分支（Gitee 可查询），否则 `main` |
+| `RELEASE_SYNC_SOURCE_TOKEN` | `--source-token` | 源仓库令牌；未设置时按平台读 `CNB_SOURCE_TOKEN` / `CNB_TOKEN` 或 `GITEE_SOURCE_TOKEN` / `GITEE_TOKEN` |
+| `RELEASE_SYNC_TARGET_TOKEN` | `--target-token` | 目标仓库令牌；未设置时按平台读 `CNB_TARGET_TOKEN` / `CNB_TOKEN` 或 `GITEE_TARGET_TOKEN` / `GITEE_TOKEN` |
+| `RELEASE_SYNC_SOURCE_API_BASE` | `--source-api-base` | 源平台 API 地址；未设置时按平台读 `CNB_SOURCE_API_BASE` / `CNB_API_BASE`（默认 `https://api.cnb.cool`）或 `GITEE_SOURCE_API_BASE` / `GITEE_API_BASE`（默认 `https://gitee.com/api/v5`） |
+| `RELEASE_SYNC_TARGET_API_BASE` | `--target-api-base` | 目标平台 API 地址；未设置时按平台读 `CNB_TARGET_API_BASE` / `CNB_API_BASE` 或 `GITEE_TARGET_API_BASE` / `GITEE_API_BASE` |
 | `RELEASE_SYNC_VERBOSE` | `--verbose` | 输出详细日志：`1`/`true`/`yes`/`on` 开启，`0`/`false`/`no`/`off` 关闭 |
 | `CNB_SOURCE_TOKEN` | — | 源仓库 CNB 访问令牌（`repo-release:r`），`CNB_TOKEN` 的源专用覆盖 |
 | `CNB_TARGET_TOKEN` | — | 目标仓库 CNB 访问令牌（`repo-release:rw`），`CNB_TOKEN` 的目标专用覆盖 |
 | `CNB_TOKEN` | — | 源 / 目标共用的 CNB 访问令牌；需要同时能读源、写目标 |
 | `CNB_SOURCE_API_BASE` / `CNB_TARGET_API_BASE` / `CNB_API_BASE` | — | CNB API 地址覆盖；`CNB_API_BASE` 对源与目标都生效 |
+| `GITEE_SOURCE_TOKEN` | — | 源仓库 Gitee 私人访问令牌，`GITEE_TOKEN` 的源专用覆盖 |
+| `GITEE_TARGET_TOKEN` | — | 目标仓库 Gitee 私人访问令牌，`GITEE_TOKEN` 的目标专用覆盖 |
+| `GITEE_TOKEN` | — | 源 / 目标共用的 Gitee 私人访问令牌 |
+| `GITEE_SOURCE_API_BASE` / `GITEE_TARGET_API_BASE` / `GITEE_API_BASE` | — | Gitee API 地址覆盖；`GITEE_API_BASE` 对源与目标都生效 |
 
 示例（令牌只走环境变量，不进入命令行参数）：
 
 ```bash
-export CNB_SOURCE_TOKEN=<源仓库令牌>
-export CNB_TARGET_TOKEN=<目标仓库令牌>
+export CNB_SOURCE_TOKEN=<CNB 源仓库令牌>
+export GITEE_TARGET_TOKEN=<Gitee 目标仓库令牌>
 export RELEASE_SYNC_SOURCE=org/source
-export RELEASE_SYNC_TARGET=org/target
+export RELEASE_SYNC_TARGET=gitee.com/owner/repo
 export RELEASE_SYNC_TAG=v1.0.0
 
 publish-apk release-sync
@@ -1638,6 +1670,9 @@ make aab AAB_FILE=./app-release.aab              # 查看 AAB 安装包信息
 make aab-help                                    # aab 命令帮助
 make release-sync RELEASE_SYNC_SOURCE=org/source RELEASE_SYNC_TARGET=org/target \
   RELEASE_SYNC_TAG=v1.0.0                        # 同步 CNB 发布（令牌用 CNB_* 环境变量）
+CNB_SOURCE_TOKEN=... GITEE_TARGET_TOKEN=... \
+  make release-sync RELEASE_SYNC_SOURCE=org/source \
+    RELEASE_SYNC_TARGET=gitee.com/owner/repo RELEASE_SYNC_TAG=v1.0.0  # 同步到 Gitee
 make release-sync-help                           # release-sync 命令帮助
 HARMONY_STORE_PASSWORD=<p12口令> make huawei-signing-config \
   HARMONY_STORE_FILE=./storeFile.p12 HARMONY_CERTPATH=./certpath.cer \
@@ -1665,7 +1700,7 @@ make google-upload-aab GOOGLE_PACKAGE_NAME=com.example.app GOOGLE_FILE=./app-rel
 make pack-check                                  # 查看 npm 发布物内容（npm pack --dry-run，只打印清单、不生成 .tgz）
 ```
 
-设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`CNB_SOURCE_TOKEN`、`CNB_TARGET_TOKEN`、`CNB_TOKEN`、`CNB_SOURCE_API_BASE`、`CNB_TARGET_API_BASE`、`CNB_API_BASE`、`RELEASE_SYNC_SOURCE_TOKEN`、`RELEASE_SYNC_TARGET_TOKEN`、`RELEASE_SYNC_SOURCE_API_BASE`、`RELEASE_SYNC_TARGET_API_BASE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
+设计约定：**只有 make 命令行上显式传入的变量才转成选项**；来自环境变量（含 `source .env`）的值一律不转发，交给命令自己读取，以免密钥进入命令行参数（`ps` 可见）或被 make 回显到 CI 日志。`HUAWEI_VERBOSE`、`GOOGLE_VERBOSE`、`CERT_VERBOSE`、`CERT_PASSWORD`、`PROFILE_VERBOSE`、`HAP_VERBOSE`、`APP_VERBOSE`、`APK_VERBOSE`、`AAB_VERBOSE`、`HARMONY_VERBOSE`、`ANDROID_KEYSTORE_BASE64`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`ANDROID_STORE_FILE`、`ANDROID_KEYSTORE_CONFIG`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD`、`GITHUB_TOKEN`、`GITHUB_REPOSITORY`、`GITHUB_API_URL`、`CNB_SOURCE_TOKEN`、`CNB_TARGET_TOKEN`、`CNB_TOKEN`、`CNB_SOURCE_API_BASE`、`CNB_TARGET_API_BASE`、`CNB_API_BASE`、`GITEE_SOURCE_TOKEN`、`GITEE_TARGET_TOKEN`、`GITEE_TOKEN`、`GITEE_SOURCE_API_BASE`、`GITEE_TARGET_API_BASE`、`GITEE_API_BASE`、`RELEASE_SYNC_SOURCE_TOKEN`、`RELEASE_SYNC_TARGET_TOKEN`、`RELEASE_SYNC_SOURCE_API_BASE`、`RELEASE_SYNC_TARGET_API_BASE`、`GOOGLE_CHANGES_NOT_SENT_FOR_REVIEW`、`HUAWEI_API_BASE`、`GOOGLE_API_BASE`、`GOOGLE_TOKEN_URI` 无需转发——make 会把命令行变量导出给子进程，命令直接读取（开关型选项转成选项反而无法表达"关闭"）。`CERT_PASSWORD`、`ANDROID_KEYSTORE_PASSWORD`、`ANDROID_KEY_PASSWORD`、`HARMONY_STORE_PASSWORD`、`HARMONY_KEY_PASSWORD` 还刻意不转成 `--password` / `--store-password` / `--key-password`，避免密码进入子进程的 argv。`GOOGLE_SERVICE_ACCOUNT_DATA` 含双引号、`GOOGLE_PRIVATE_KEY_DATA` 是多行 PEM，也刻意不作选项转发，同样由子进程从环境变量读取。
 
 `make pack-check` 只做发布前检查：打印会打进 npm 包的文件清单，不改动工作区。`package.json` 的 `files` 只写了 `src`，但 npm 无论 `files` 怎么写都会带上 `package.json`、`README*` 与 `LICENSE*`（以及 `bin`/`main` 指向的文件），所以 `LICENSE` 与 `README.md` 不需要写进 `files`。
 
@@ -1703,6 +1738,17 @@ make pack-check                                  # 查看 npm 发布物内容（
   <https://docs.cnb.cool/zh/build/internal-steps/git/release.html>
 
 以上文档归 CNB 所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
+
+### Gitee
+
+- Gitee OpenAPI v5 文档（Release、标签、`attach_files` 附件等接口）：
+  <https://gitee.com/api/v5/swagger>
+- Gitee OpenAPI v5 文档 JSON：
+  <https://gitee.com/api/v5/doc_json>
+- Gitee 私人访问令牌（创建 / 管理 `projects` 读写令牌）：
+  <https://gitee.com/profile/personal_access_tokens>
+
+以上文档归 Gitee 所有；本项目仅在帮助文档中做中文转述并给出链接，不复制其正文。
 
 ### 华为
 

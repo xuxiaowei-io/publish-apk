@@ -43,6 +43,8 @@ jobs:
           node tests/github.test.js
           node tests/keystore-config.test.js
           node tests/release-sync.test.js
+          node tests/release-sync-gitee.test.js
+          node tests/release-sync-gitee-source.test.js
 
       - name: Smoke test CLI
         run: |
