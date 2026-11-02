@@ -631,6 +631,7 @@ CNB_SOURCE_TOKEN=<源令牌> CNB_TARGET_TOKEN=<目标令牌> \
   SHA-256；与源一致时跳过，不一致时先删除同名附件再上传。目标多余附件同样在最后删除。
 - GitHub 附件上传域名与 API 不同：github.com 用 `https://uploads.github.com`，GitHub Enterprise
   用 `/api/uploads`；可用 `GITHUB_*_UPLOAD_BASE` 覆盖。
+- GitHub 不允许 `.app` 后缀附件：目标为 GitHub 时先把 `.app` 打包成 `.app.zip` 再上传。
 - GitHub 偶发「附件已落盘但上传接口返回 404」：会按同名 + 大小 + sha256 digest 复核，确认已存在则
   按成功处理，避免重复上传。
 - **GitCode 目标正常上传附件**：先 `GET /releases/{tag}/upload_url` 取预签名地址与 `x-obs-*` 请求头，

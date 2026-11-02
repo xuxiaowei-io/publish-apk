@@ -25,7 +25,8 @@
  *       deleteAsset(releaseId, assetId, { tag })
  *     }
  *   }
- *    可选：getDefaultBranch() -> string，未显式给 --target-branch 时用于创建目标标签。
+ *    可选：getDefaultBranch() -> string，未显式给 --target-branch 时用于创建目标标签；
+ *          targetAssetName(assetName) -> string，目标附件名映射（如 GitHub 的 .app -> .app.zip）。
  *
  * 以后接其它平台（Gitee / GitHub 已实现）：
  *   1. 照 src/cnb.js / src/gitee.js / src/github-release.js / src/gitcode.js / src/gitlab.js / src/gitlink.js 的形状新增适配器；
@@ -505,7 +506,7 @@ function renderReleaseSyncHelp() {
           ['草稿 / 预发布', '按源发布原样同步；draft 发布同样会搬运附件'],
           ['安全兜底', '源发布响应没有附件列表时，跳过“删除目标多余附件”，避免误删'],
           ['Gitee 附件', '目标为 Gitee 时默认不下载 / 不上传产物，直接在发布说明生成 Markdown 下载表格'],
-          ['GitHub 附件', '正常下载 / 上传；asset digest 用于 SHA 跳过或替换；上传返回 404 时按同名 + 大小 + sha256 核对是否已落盘'],
+          ['GitHub 附件', '正常下载 / 上传；.app 先打包为 .app.zip；asset digest 用于 SHA 跳过或替换'],
           ['GitCode 附件', '正常下载 / 上传；先取 upload_url 再 PUT；digest 用于 SHA 跳过或替换，同名先删后传'],
           ['GitLab 附件', '上传到 Generic Package Registry（release-sync/:tag/:file），再创建 Release Link'],
           ['GitLink 附件', '正常下载 / 上传；先 POST /attachments.json 拿附件 ID，再用 attachment_ids 关联发布'],
@@ -1199,7 +1200,11 @@ async function runReleaseSync(argv, env) {
 
   const sourceAssetsKnown = Array.isArray(sourceRelease.assets)
   const sourceAssets = sourceAssetsKnown ? sourceRelease.assets.filter(isAsset) : []
-  const sourceAssetNames = new Set(sourceAssets.map((asset) => asset.name))
+  const targetAssetName = (asset) =>
+    typeof target.provider.targetAssetName === 'function'
+      ? target.provider.targetAssetName(asset.name)
+      : asset.name
+  const sourceAssetNames = new Set(sourceAssets.map((asset) => targetAssetName(asset)))
   const targetAssetMap = new Map()
   if (targetRelease !== null && Array.isArray(targetRelease.assets)) {
     for (const asset of targetRelease.assets.filter(isAsset)) {
@@ -1207,9 +1212,11 @@ async function runReleaseSync(argv, env) {
     }
   }
   const decisions = sourceAssets.map((asset) => {
-    const existing = targetAssetMap.get(asset.name)
+    const targetName = targetAssetName(asset)
+    const existing = targetAssetMap.get(targetName)
     return {
       asset,
+      targetName,
       existing,
       skip: existing !== undefined && sameAsset(asset, existing),
     }

@@ -31,7 +31,8 @@
  */
 import { createHash } from 'node:crypto'
 import { createReadStream, createWriteStream } from 'node:fs'
-import { stat } from 'node:fs/promises'
+import { rm, stat } from 'node:fs/promises'
+import { once } from 'node:events'
 import { Readable, Transform } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 
@@ -294,6 +295,114 @@ async function sha256File(filePath) {
   })
   await pipeline(createReadStream(filePath), tap)
   return hash.digest('hex')
+}
+
+/** `.app` 是 macOS 应用包，GitHub Release 会拒绝该后缀；上传前打成 zip */
+export function githubTargetAssetName(assetName) {
+  return /\.app$/i.test(assetName) ? `${assetName}.zip` : assetName
+}
+
+const CRC32_TABLE = (() => {
+  const table = new Uint32Array(256)
+  for (let i = 0; i < 256; i += 1) {
+    let value = i
+    for (let bit = 0; bit < 8; bit += 1) {
+      value = value & 1 ? 0xedb88320 ^ (value >>> 1) : value >>> 1
+    }
+    table[i] = value >>> 0
+  }
+  return table
+})()
+
+function crc32Update(crc, buffer) {
+  let value = crc
+  for (const byte of buffer) {
+    value = CRC32_TABLE[(value ^ byte) & 0xff] ^ (value >>> 8)
+  }
+  return value >>> 0
+}
+
+async function writeAll(stream, buffer) {
+  if (!stream.write(buffer)) {
+    await once(stream, 'drain')
+  }
+}
+
+/**
+ * 单文件 ZIP（store，不压缩）——零依赖，适合几十 MB 的 `.app` 附件。
+ * ZIP 结构：local header + 文件数据 + data descriptor + central directory + EOCD。
+ */
+export async function zipSingleFile(sourcePath, zipPath, entryName) {
+  const { size } = await stat(sourcePath)
+  const name = Buffer.from(String(entryName).replace(/\//g, '_'), 'utf8')
+  const local = Buffer.alloc(30)
+  local.writeUInt32LE(0x04034b50, 0)
+  local.writeUInt16LE(20, 4)
+  local.writeUInt16LE(0x0008, 6) // data descriptor
+  local.writeUInt16LE(0, 8) // store
+  local.writeUInt16LE(0, 10)
+  local.writeUInt16LE(0x0021, 12)
+  local.writeUInt32LE(0, 14)
+  local.writeUInt32LE(0, 18)
+  local.writeUInt32LE(0, 22)
+  local.writeUInt16LE(name.length, 26)
+  local.writeUInt16LE(0, 28)
+
+  const out = createWriteStream(zipPath)
+  let crc = 0xffffffff
+  let written = 0
+  try {
+    await writeAll(out, Buffer.concat([local, name]))
+    for await (const chunk of createReadStream(sourcePath)) {
+      crc = crc32Update(crc, chunk)
+      written += chunk.length
+      await writeAll(out, chunk)
+    }
+    const finalCrc = (crc ^ 0xffffffff) >>> 0
+    if (written !== size) {
+      throw new Error(`打包 ${entryName} 时读取字节数不一致: ${written} != ${size}`)
+    }
+    const descriptor = Buffer.alloc(16)
+    descriptor.writeUInt32LE(0x08074b50, 0)
+    descriptor.writeUInt32LE(finalCrc, 4)
+    descriptor.writeUInt32LE(written, 8)
+    descriptor.writeUInt32LE(written, 12)
+    const central = Buffer.alloc(46)
+    central.writeUInt32LE(0x02014b50, 0)
+    central.writeUInt16LE(20, 4)
+    central.writeUInt16LE(20, 6)
+    central.writeUInt16LE(0x0008, 8)
+    central.writeUInt16LE(0, 10)
+    central.writeUInt16LE(0, 12)
+    central.writeUInt16LE(0x0021, 14)
+    central.writeUInt32LE(finalCrc, 16)
+    central.writeUInt32LE(written, 20)
+    central.writeUInt32LE(written, 24)
+    central.writeUInt16LE(name.length, 28)
+    central.writeUInt16LE(0, 30)
+    central.writeUInt16LE(0, 32)
+    central.writeUInt16LE(0, 34)
+    central.writeUInt16LE(0, 36)
+    central.writeUInt32LE(0, 38)
+    central.writeUInt32LE(0, 42)
+    const centralOffset = local.length + name.length + written + descriptor.length
+    const centralSize = central.length + name.length
+    const eocd = Buffer.alloc(22)
+    eocd.writeUInt32LE(0x06054b50, 0)
+    eocd.writeUInt16LE(0, 4)
+    eocd.writeUInt16LE(0, 6)
+    eocd.writeUInt16LE(1, 8)
+    eocd.writeUInt16LE(1, 10)
+    eocd.writeUInt32LE(centralSize, 12)
+    eocd.writeUInt32LE(centralOffset, 16)
+    eocd.writeUInt16LE(0, 20)
+    await writeAll(out, Buffer.concat([descriptor, central, name, eocd]))
+    out.end()
+    await once(out, 'finish')
+  } catch (error) {
+    out.destroy()
+    throw error
+  }
 }
 
 /** GitHub REST 客户端 */
@@ -697,16 +806,23 @@ class GithubReleaseClient {
 
   /** 上传附件：GitHub 不允许同名附件，先删同名再上传 */
   async uploadAsset(releaseId, assetName, filePath, { contentType } = {}) {
+    const targetName = githubTargetAssetName(assetName)
+    const isPacked = targetName !== assetName
+    const uploadPath = isPacked ? `${filePath}.zip` : filePath
+    if (isPacked) {
+      await zipSingleFile(filePath, uploadPath, assetName)
+    }
+    try {
     const existing = await this.getAssets(releaseId)
     for (const asset of existing) {
-      if (asset.name !== assetName) {
+      if (asset.name !== targetName) {
         continue
       }
       await this.deleteAsset(releaseId, asset.id)
     }
 
-    const { size } = await stat(filePath)
-    const url = this.uploadUrl(releaseId, assetName)
+    const { size } = await stat(uploadPath)
+    const url = this.uploadUrl(releaseId, targetName)
     let response
     try {
       const init = {
@@ -716,8 +832,9 @@ class GithubReleaseClient {
           Authorization: `Bearer ${this.token}`,
           'X-GitHub-Api-Version': API_VERSION,
           'User-Agent': USER_AGENT,
-          'Content-Type':
-            typeof contentType === 'string' && contentType !== ''
+          'Content-Type': isPacked
+            ? 'application/zip'
+            : typeof contentType === 'string' && contentType !== ''
               ? contentType
               : 'application/octet-stream',
           'Content-Length': String(size),
@@ -727,12 +844,12 @@ class GithubReleaseClient {
       if (size === 0) {
         init.body = Buffer.alloc(0)
       } else {
-        init.body = Readable.toWeb(createReadStream(filePath))
+        init.body = Readable.toWeb(createReadStream(uploadPath))
         init.duplex = 'half'
       }
       response = await this.fetchImpl(url, init)
     } catch (error) {
-      const verified = await this.verifyUploadedAsset(releaseId, assetName, filePath, size)
+      const verified = await this.verifyUploadedAsset(releaseId, targetName, uploadPath, size)
       if (verified !== null) {
         return { ...verified, release_id: releaseId }
       }
@@ -750,7 +867,7 @@ class GithubReleaseClient {
     if (!response.ok) {
       // GitHub 偶尔会在附件已经落盘后仍返回 404（例如安全扫描 / 代理抖动）。
       // 先按同名 + 大小 + sha256 核对目标附件，确认存在就按成功处理，避免重复上传。
-      const verified = await this.verifyUploadedAsset(releaseId, assetName, filePath, size)
+      const verified = await this.verifyUploadedAsset(releaseId, targetName, uploadPath, size)
       if (verified !== null) {
         return { ...verified, release_id: releaseId }
       }
@@ -758,7 +875,13 @@ class GithubReleaseClient {
     }
     return {
       ...(data !== null && typeof data === 'object' ? data : {}),
+      name: targetName,
       release_id: releaseId,
+    }
+    } finally {
+      if (isPacked) {
+        await rm(uploadPath, { force: true })
+      }
     }
   }
 
@@ -803,6 +926,7 @@ export const githubReleaseProvider = {
   tokenEnvs: GITHUB_TOKEN_ENVS,
   apiBaseEnvs: GITHUB_API_BASE_ENVS,
   uploadBaseEnvs: GITHUB_UPLOAD_BASE_ENVS,
+  targetAssetName: githubTargetAssetName,
   // GitHub 支持附件上传，且支持 draft / make_latest
   assetUploadDirectToTable: false,
   supportsDraft: true,
