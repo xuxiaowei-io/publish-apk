@@ -80,8 +80,10 @@ publish-apk app --file ./app-signed.app                    # 查看 APP 安装�
 publish-apk app --file ./*.app                             # 一次查看多个 APP
 publish-apk apk --file ./app-arm64-v8a-release.apk        # 查看 APK 安装包信息
 publish-apk aab --file ./app-release.aab                  # 查看 AAB 安装包信息
+publish-apk xapk --file ./app-1.0.0.xapk                  # 查看 XAPK 安装包信息（manifest.json + 拆分 APK）
 publish-apk apk --file ./*.apk                             # 一次查看多个 APK
 publish-apk aab --file ./*.aab                             # 一次查看多个 AAB
+publish-apk xapk --file ./*.xapk                           # 一次查看多个 XAPK
 publish-apk release-sync --source https://cnb.cool/org/source \
   --target https://cnb.cool/org/target --tag v1.0.0         # 同步 CNB 发布（说明 + 附件 + 目标标签）
 ```
@@ -137,11 +139,11 @@ publish-apk google upload-aab --package-name com.example.app \
   --private-key ./service-account.pem --track production   # 分项凭据（CI 分层存 Secret）
 ```
 
-### 为什么会有查看证书 / profile / keystore / HAP / APP / APK / AAB 的命令？
+### 为什么会有查看证书 / profile / keystore / HAP / APP / APK / AAB / XAPK 的命令？
 
-本项目的主流程是把手机 APP 上传到应用商店；`cert` / `profile` / `keystore` 是**签名材料的本地核对工具**，`hap` / `app` / `apk` / `aab` 是**安装包的本地核对工具**，都不是上传流程中的一步。
+本项目的主流程是把手机 APP 上传到应用商店；`cert` / `profile` / `keystore` 是**签名材料的本地核对工具**，`hap` / `app` / `apk` / `aab` / `xapk` 是**安装包的本地核对工具**，都不是上传流程中的一步。
 
-华为鸿蒙 APP 在打包 / 签名时需要 `.cer`、`.p12`、`.p7b` 三类文件。同一开发者账号下往往有多套证书与 Profile，文件名、别名、Bundle、有效期、设备范围都很接近，容易拿错；`cert` / `profile` 把关键字段逐行列出，**主要用于区分多个鸿蒙证书 / Profile，确认当前签名配置用的是哪一份**。`hap` / `app` / `apk` / `aab` 则用于核对构建产物本身，尤其是区分同名的 `signed.*` 与 `unsigned.*`：
+华为鸿蒙 APP 在打包 / 签名时需要 `.cer`、`.p12`、`.p7b` 三类文件。同一开发者账号下往往有多套证书与 Profile，文件名、别名、Bundle、有效期、设备范围都很接近，容易拿错；`cert` / `profile` 把关键字段逐行列出，**主要用于区分多个鸿蒙证书 / Profile，确认当前签名配置用的是哪一份**。`hap` / `app` / `apk` / `aab` / `xapk` 则用于核对构建产物本身，尤其是区分同名的 `signed.*` 与 `unsigned.*`：
 
 | 文件 | 作用 | 查看方式 |
 | --- | --- | --- |
@@ -152,6 +154,7 @@ publish-apk google upload-aab --package-name com.example.app \
 | `.app` | 鸿蒙 App Pack（外层包信息、内层 HAP / HSP、签名状态） | `publish-apk app --file ./app-signed.app` |
 | `.apk` | Android 安装包（包名、SDK、ABI、权限、签名证书） | `publish-apk apk --file ./app-arm64-v8a-release.apk` |
 | `.aab` | Android App Bundle（包名、SDK、模块、ABI、签名证书） | `publish-apk aab --file ./app-release.aab` |
+| `.xapk` | Android 分发包（manifest.json、base / split APK、OBB、签名证书） | `publish-apk xapk --file ./app-1.0.0.xapk` |
 
 Android 的签名密钥库（`.jks` / `.keystore` / `.p12`）用 `keystore` 校验：它不仅看证书，还会用
 `keytool` 确认 keystore 口令、别名与私钥口令是否配套，并支持把 `ANDROID_KEYSTORE_BASE64` 解码后
@@ -159,7 +162,7 @@ Android 的签名密钥库（`.jks` / `.keystore` / `.p12`）用 `keystore` 校�
 要把 CI 里的 BASE64 / 口令 / 别名写成 Gradle 读取的 `keystore.properties`（并把 BASE64 落盘成
 keystore 文件）时用 `keystore-config`。详见下面的 `keystore` / `keystore-config` / `keystore-gen` 小节。
 
-查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文，`hap` / `app` / `apk` / `aab` 只读包内信息与签名块头；这些命令只读取本地文件，不会访问应用商店。
+查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文，`hap` / `app` / `apk` / `aab` / `xapk` 只读包内信息与签名块头；这些命令只读取本地文件，不会访问应用商店。
 
 ### cert（查看证书 / PKCS#12 密钥库信息）
 
@@ -508,6 +511,37 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 - AAB 解析只使用 Node 内置能力（ZIP 中央目录 + `node:zlib` + 自带 protobuf 解析），
   不依赖 JDK、`openssl`、`bundletool` 或 npm 第三方包。
 - 不输出证书 PEM 原文；AAB 里没有私钥。
+
+### xapk（查看 XAPK 安装包信息）
+
+XAPK 是第三方渠道（如 APKPure）使用的分发格式，本质也是 ZIP：外层含 `manifest.json`、`icon.png`、
+一个 base APK 与若干 config split APK（如 `config.arm64_v8a.apk`），可能还有 OBB 扩展文件。
+本命令直接解析 `manifest.json` 与每个内层 APK 的二进制 Manifest / 签名块，不依赖 `aapt` / `apkanalyzer`。
+文件必须用 `--file`（或环境变量 `XAPK_FILE`）显式指定，**没有默认文件**。
+
+```bash
+publish-apk xapk --file ./app-1.0.0.xapk
+publish-apk xapk --file ./*.xapk                   # 一次查看多个 XAPK，按顺序输出
+publish-apk xapk --file ./app-1.0.0.xapk --verbose
+XAPK_FILE=./app.xapk publish-apk xapk
+XAPK_VERBOSE=1 publish-apk xapk --file ./app.xapk
+```
+
+- `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.xapk`）；按参数顺序逐个输出，文件之间空一行。
+- 默认输出：文件大小、ZIP 条目数、XAPK 版本、应用名、包名、版本 / versionCode、
+  Min / Target SDK、ABI、DEX 数量、权限、启动 Activity、base APK 的签名状态与签名方案、
+  拆分 APK 列表（base + split）与 OBB，以及签名证书（叶子证书，含 MD5 / SHA-256 指纹）；
+  末尾会附一行 `（加 --verbose 查看全部字段…）` 提示，`--verbose` 时不再输出。
+- `--verbose` / `XAPK_VERBOSE=1` 追加：外层 ZIP 条目、`manifest.json` 原文、图标、各 split 的
+  包名 / 版本 / SDK / ABI / DEX / 签名 / 条目数、base APK 的签名块 pair、完整证书链，
+  以及应用标签 / 允许备份 / uses-feature 与全部 Activity。
+- 包名 / 版本 / SDK / 权限 / 启动 Activity 优先取自 base APK 的 `AndroidManifest.xml`；
+  `manifest.json` 用于应用名、XAPK 版本与 split 顺序，二者包名不一致时 `--verbose` 会提示。
+- 没有 `manifest.json` 时按内层 `.apk` 推断 base（`<包名>.apk` 或第一个非 `config.*` 的 APK）。
+- 签名只检测 JAR v1 与 APK Signature Scheme v2 / v3 / v3.1，**不执行证书链、摘要或签名验签**；
+  输出里会明确写「未验签」。
+- XAPK 解析只使用 Node 内置能力（ZIP 中央目录 + `node:zlib`），不依赖 JDK、`openssl` 或 npm 第三方包。
+- 不输出证书 PEM 原文；XAPK 里没有私钥。
 
 ### release-sync（同步 Git 发布）
 

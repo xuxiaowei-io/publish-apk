@@ -5,9 +5,10 @@
  * 本文件保持**厂商无关**：只负责根帮助、版本号与命令分发。
  * 各厂商的命令与帮助文档放在各自模块里（当前有 src/huawei.js 与 src/google.js），
  * 新增厂商时实现 runXxx(argv, env) 并在下面 VENDORS 注册一行即可；
- * 与厂商无关的工具命令（当前有 src/cert.js、src/profile.js、src/hap.js、src/apk.js、src/keystore.js、
- * src/release-sync.js）注册到 TOOLS。
+ * 与厂商无关的工具命令（当前有 src/cert.js、src/profile.js、src/hap.js、src/apk.js、src/xapk.js、
+ * src/keystore.js、src/release-sync.js）注册到 TOOLS。
  * apk.js 同时导出 apk / aab 两个命令：APK 与 AAB 的 Android 包查看工具。
+ * xapk.js 导出 xapk 命令：XAPK（manifest.json + base / split APK）查看工具。
  * keystore.js 同时导出 keystore / keystore-env / keystore-config / keystore-gen：Android keystore 校验、
  * CI 变量导出（keystore-env 支持 --github 写入 GitHub 密钥）、由变量生成 keystore.properties 与快速生成。
  * hap.js 同时导出 hap / app 两个命令：HAP 单模块包与 APP 多模块包的查看工具。
@@ -24,11 +25,12 @@
  *   9. node src/publish-apk.js app ...      查看 APP 安装包信息（与厂商无关的工具命令）
  *  10. node src/publish-apk.js apk ...      查看 APK 安装包信息（与厂商无关的工具命令）
  *  11. node src/publish-apk.js aab ...      查看 AAB 安装包信息（与厂商无关的工具命令）
- *  12. node src/publish-apk.js keystore-env ... 导出 Android keystore 的 CI 变量（与厂商无关的工具命令）
- *  13. node src/publish-apk.js keystore-config ... 由变量生成 keystore.properties（与厂商无关的工具命令）
- *  14. node src/publish-apk.js keystore-gen ... 快速生成 Android keystore（与厂商无关的工具命令）
- *  15. node src/publish-apk.js release-sync ... 同步 Git 平台的发布（发布说明与附件，与厂商无关的工具命令）
- *  16. node src/publish-apk.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
+ *  12. node src/publish-apk.js xapk ...     查看 XAPK 安装包信息（与厂商无关的工具命令）
+ *  13. node src/publish-apk.js keystore-env ... 导出 Android keystore 的 CI 变量（与厂商无关的工具命令）
+ *  14. node src/publish-apk.js keystore-config ... 由变量生成 keystore.properties（与厂商无关的工具命令）
+ *  15. node src/publish-apk.js keystore-gen ... 快速生成 Android keystore（与厂商无关的工具命令）
+ *  16. node src/publish-apk.js release-sync ... 同步 Git 平台的发布（发布说明与附件，与厂商无关的工具命令）
+ *  17. node src/publish-apk.js <未知命令>   先输出根帮助文档、再输出错误日志，退出代码 1
  *
  * 厂商命令的详细行为见各自模块的头部注释。
  *
@@ -53,6 +55,7 @@ import {
 import { renderHelp } from './help.js'
 import { certCommand } from './cert.js'
 import { aabCommand, apkCommand } from './apk.js'
+import { xapkCommand } from './xapk.js'
 import { appCommand, hapCommand } from './hap.js'
 import { googleCommand } from './google.js'
 import { huaweiCommand } from './huawei.js'
@@ -85,6 +88,7 @@ const TOOLS = [
   appCommand,
   apkCommand,
   aabCommand,
+  xapkCommand,
   keystoreCommand,
   keystoreEnvCommand,
   keystoreConfigCommand,
@@ -148,6 +152,7 @@ function renderRootHelp() {
       `  ${PROGRAM} app --file <文件>       查看 APP 安装包信息`,
       `  ${PROGRAM} apk --file <文件>       查看 APK 安装包信息`,
       `  ${PROGRAM} aab --file <文件>       查看 AAB 安装包信息`,
+      `  ${PROGRAM} xapk --file <文件>      查看 XAPK 安装包信息`,
       `  ${PROGRAM} release-sync --source <源仓库> --target <目标仓库> 同步发布（发布说明与附件）`,
     ],
   })

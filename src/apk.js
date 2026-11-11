@@ -85,7 +85,7 @@ const APK_SIG_BLOCK_NAMES = new Map([
 
 // -------------------------------------------------------------- 开关型参数
 
-function resolveVerbose(options, env, help, envName = ENV_VERBOSE) {
+export function resolveVerbose(options, env, help, envName = ENV_VERBOSE) {
   if (options.get(OPTION_VERBOSE) === true) {
     return true
   }
@@ -666,7 +666,7 @@ function readApkSigningBlock(buffer, centralOffset, help) {
 }
 
 /** 读取 META-INF v1 JAR 签名证书 */
-function readV1Certificates(buffer, entries, help) {
+export function readV1Certificates(buffer, entries, help) {
   const signatureEntries = entries.filter((entry) =>
     /^META-INF\/[^/]+\.(RSA|DSA|EC)$/i.test(entry.name),
   )
@@ -684,7 +684,7 @@ function readV1Certificates(buffer, entries, help) {
   })
 }
 
-function signatureLabel(v1Groups, schemes, kind = 'APK') {
+export function signatureLabel(v1Groups, schemes, kind = 'APK') {
   const parts = []
   if (v1Groups.length > 0) {
     parts.push('JAR v1')
@@ -768,8 +768,9 @@ function apkLines(buffer, path, entries, manifest, signing, verbose) {
   return { lines, v1Groups, certificateGroups }
 }
 
-function verboseLines(lines, entries, manifest, signing) {
-  lines.push('', 'APK 签名块:')
+/** 输出 APK Signing Block 的 pair 列表；XAPK 查看内层 APK 时复用 */
+export function signingBlockLines(lines, signing, title = 'APK 签名块:') {
+  lines.push('', title)
   if (signing.pairs.length === 0) {
     lines.push('无（可能是 JAR v1 或未签名）')
   } else {
@@ -778,15 +779,21 @@ function verboseLines(lines, entries, manifest, signing) {
       lines.push(`- 0x${pair.id.toString(16)} ${name}，${pair.length} 字节`)
     }
   }
+}
 
-  lines.push('', 'ZIP 条目:')
+/** 输出 ZIP 条目列表；XAPK 查看外层 ZIP 时复用 */
+export function zipEntryLines(lines, entries, title = 'ZIP 条目:') {
+  lines.push('', title)
   for (const entry of entries) {
     const method =
       entry.method === 0 ? 'store' : entry.method === 8 ? 'deflate' : `method ${entry.method}`
     lines.push(`- ${entry.name}（${entry.size} 字节，${method}）`)
   }
+}
 
-  lines.push('', 'Manifest:')
+/** 输出 Manifest 的补充字段与 Activity 列表；XAPK 查看 base APK 时复用 */
+export function manifestLines(lines, manifest, title = 'Manifest:') {
+  lines.push('', title)
   if (manifest.label !== undefined) {
     lines.push(`应用标签: ${manifest.label}`)
   }
@@ -802,12 +809,17 @@ function verboseLines(lines, entries, manifest, signing) {
       lines.push(`- ${activity.name}${activity.launcher ? '（启动）' : ''}`)
     }
   }
+}
 
+function verboseLines(lines, entries, manifest, signing) {
+  signingBlockLines(lines, signing)
+  zipEntryLines(lines, entries)
+  manifestLines(lines, manifest)
 }
 
 // ------------------------------------------------------------------ 命令入口
 
-function readApkFile(path, help) {
+export function readPackageFile(path, help) {
   try {
     return readFileSync(path)
   } catch (error) {
@@ -818,7 +830,7 @@ function readApkFile(path, help) {
   }
 }
 
-function parseApk(buffer, path, help) {
+export function parseApk(buffer, path, help) {
   const eocd = readEndOfCentralDirectory(buffer, help)
   const entries = readZipEntries(buffer, eocd, help)
   const manifestEntry = findZipEntry(entries, 'AndroidManifest.xml')
@@ -862,7 +874,7 @@ function runApk(argv, env) {
   }
 
   for (const [index, path] of paths.entries()) {
-    const buffer = readApkFile(path, renderApkHelp)
+    const buffer = readPackageFile(path, renderApkHelp)
     const parsed = parseApk(buffer, path, renderApkHelp)
     const { lines } = apkLines(
       buffer,
@@ -1029,7 +1041,7 @@ function runAab(argv, env) {
   }
 
   for (const [index, path] of paths.entries()) {
-    const buffer = readApkFile(path, renderAabHelp)
+    const buffer = readPackageFile(path, renderAabHelp)
     const parsed = parseAab(buffer, path, renderAabHelp)
     const lines = aabLines(
       buffer,
