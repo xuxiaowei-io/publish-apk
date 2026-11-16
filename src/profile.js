@@ -26,7 +26,8 @@ import {
   readEnv,
   stdout,
 } from './cli.js'
-import { certificateDetailLines } from './cert.js'
+import { certificateDetailLines, certificateFingerprints } from './cert.js'
+import { DIGEST_HELP_NOTE, digestLines, fileDigests } from './digest.js'
 import { renderHelp } from './help.js'
 
 /** 命令名 */
@@ -106,7 +107,7 @@ function renderProfileHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', 'profile 信息，每行一条「标签: 值」；--verbose 时输出全部字段'],
+          ['stdout', 'profile 信息、文件摘要（MD5 / SHA-1 / SHA-256），每行一条「标签: 值」；--verbose 时追加 SHA-512 与全部字段'],
           ['stderr', '错误信息'],
         ],
       },
@@ -126,7 +127,8 @@ function renderProfileHelp() {
       `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./profile.p7b`,
       '',
       '说明: 文件必须是 PKCS#7 SignedData（P7B）；华为 AppGallery 的 profile 内嵌 JSON',
-      '说明: 默认输出 profile 常用字段与开发证书摘要；--verbose 追加全部 JSON 字段、签名参数与完整证书字段',
+      DIGEST_HELP_NOTE,
+      '说明: 默认输出 profile 常用字段、开发 / 发布证书摘要与证书 MD5 / SHA-1 / SHA-256 指纹；--verbose 追加全部 JSON 字段、签名参数、SHA-512 指纹与完整证书字段',
       '说明: 不输出证书 PEM 原文；P7B 里没有私钥',
       '说明: 内嵌数据不是合法 JSON 时仍会输出证书链，--verbose 会给出原因',
     ],
@@ -672,10 +674,13 @@ function addSignatureFields(lines, p7b) {
 }
 
 /** 渲染 P7B 信息 */
-function renderProfile(path, size, p7b, payload, jsonCertificates, verbose) {
+function renderProfile(path, size, p7b, payload, jsonCertificates, verbose, digests = null) {
   const lines = [line('文件', path), line('格式', 'PKCS#7 / P7B')]
   if (verbose) {
     lines.push(line('文件大小', `${size} 字节`))
+  }
+  lines.push(...digestLines(digests, verbose))
+  if (verbose) {
     addSignatureFields(lines, p7b)
   }
 
@@ -694,6 +699,10 @@ function renderProfile(path, size, p7b, payload, jsonCertificates, verbose) {
     if (item !== undefined) {
       lines.push(line(role, oneLineName(item.certificate.subject)))
       lines.push(line(`${role}到期时间`, isoDate(item.certificate.validToDate, item.certificate.validTo)))
+      const fingerprints = certificateFingerprints(item.certificate)
+      lines.push(line(`${role} MD5`, fingerprints.md5))
+      lines.push(line(`${role} SHA-1`, fingerprints.sha1))
+      lines.push(line(`${role} SHA-256`, fingerprints.sha256))
     }
   }
 
@@ -719,12 +728,20 @@ function renderProfile(path, size, p7b, payload, jsonCertificates, verbose) {
 // ------------------------------------------------------------------ 命令入口
 
 /** 解析 P7B 并返回 profile / 证书信息的行；供 profile 与 signing-config 共用 */
-export function profileInfoLines(buffer, path, help, verbose = false) {
+export function profileInfoLines(buffer, path, help, verbose = false, digests = null) {
   const p7b = parseP7b(buffer, path, help)
   const payload = parseProfilePayload(p7b.content)
   const jsonCertificates =
     payload.json === null ? [] : collectJsonCertificates(payload.json, help)
-  return renderProfile(path, buffer.length, p7b, payload, jsonCertificates, verbose).split('\n')
+  return renderProfile(
+    path,
+    buffer.length,
+    p7b,
+    payload,
+    jsonCertificates,
+    verbose,
+    digests,
+  ).split('\n')
 }
 
 /** profile 命令：解析选项、读取 P7B 并输出 profile / 证书信息 */
@@ -750,7 +767,17 @@ function runProfile(argv, env) {
   const jsonCertificates =
     payload.json === null ? [] : collectJsonCertificates(payload.json, renderProfileHelp)
 
-  stdout(renderProfile(path, buffer.length, p7b, payload, jsonCertificates, verbose))
+  stdout(
+    renderProfile(
+      path,
+      buffer.length,
+      p7b,
+      payload,
+      jsonCertificates,
+      verbose,
+      fileDigests(buffer),
+    ),
+  )
   return EXIT_OK
 }
 

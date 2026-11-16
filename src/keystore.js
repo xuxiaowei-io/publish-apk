@@ -31,11 +31,12 @@
  * 口令不会打印到 stdout / stderr；但 keytool 只接受 `-storepass` / `-keypass` 这种参数形式，
  * 所以校验期间会出现在本地 keytool 进程的 argv 里（与 huawei signing-config 的自检一致）。
  *
- * 输出：stdout 只写「标签: 值」校验结果（密钥库路径 / 大小 / 类型 / 别名 / 公钥 / 证书 /
- * 校验结论），stderr 只写落盘、备份与警告；退出代码 0 通过、1 参数错误或校验失败。
+ * 输出：stdout 只写「标签: 值」校验结果（密钥库路径 / 大小 / 文件摘要（MD5 / SHA-1 / SHA-256）/
+ * 类型 / 别名 / 公钥 / 证书（含 MD5 / SHA-1 / SHA-256 指纹）/ 校验结论），stderr 只写落盘、备份与警告；
+ * 退出代码 0 通过、1 参数错误或校验失败。
  */
 import { spawnSync } from 'node:child_process'
-import { createHash, X509Certificate } from 'node:crypto'
+import { X509Certificate } from 'node:crypto'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
@@ -51,6 +52,8 @@ import {
   stderr,
   stdout,
 } from './cli.js'
+import { certificateFingerprints } from './cert.js'
+import { digestLines, fileDigests } from './digest.js'
 import {
   GITHUB_OPTION_FLAGS,
   GITHUB_OPTION_NAMES,
@@ -176,11 +179,6 @@ function formatSize(bytes) {
     return `${(bytes / 1024).toFixed(1)} KiB（${bytes} 字节）`
   }
   return `${bytes} 字节`
-}
-
-/** 只打印前 12 位指纹，用来区分密钥库，不输出内容本身 */
-function fingerprint(buffer) {
-  return createHash('sha256').update(buffer).digest('hex').slice(0, 12)
 }
 
 /** X.509 的 subject / issuer 是多行 `C=CN\nO=...`，压成一行便于 grep */
@@ -508,25 +506,16 @@ function verifyKeystore(file, buffer, { alias, storePassword, keyPassword }) {
   }
 }
 
-/** 字节摘要格式化成 keytool 那种 XX:XX:... 大写形式 */
-function formatColonHex(buffer, algorithm) {
-  return createHash(algorithm)
-    .update(buffer)
-    .digest('hex')
-    .match(/../g)
-    .join(':')
-    .toUpperCase()
-}
-
 /** 校验结果：一行一条「标签: 值」，便于 grep / awk */
 function renderReport(displayPath, buffer, info) {
   const certificate = info.certificate
   const notBefore = certificate.validFromDate ?? certificate.validFrom
   const notAfter = certificate.validToDate ?? certificate.validTo
+  const fingerprints = certificateFingerprints(certificate)
   return [
     `密钥库: ${displayPath}`,
     `大小: ${formatSize(buffer.length)}`,
-    `SHA-256: ${fingerprint(buffer)}（前 12 位）`,
+    ...digestLines(fileDigests(buffer)),
     `类型: ${info.type}`,
     `别名: ${info.alias}`,
     '条目: PrivateKeyEntry（keytool -certreq 已解开私钥）',
@@ -535,8 +524,9 @@ function renderReport(displayPath, buffer, info) {
     `证书颁发者: ${formatDn(certificate.issuer)}`,
     `证书序列号: ${certificate.serialNumber}`,
     `证书有效期: ${formatDate(notBefore)} ~ ${formatDate(notAfter)}（${remainingDays(notAfter)}）`,
-    `证书 MD5: ${formatColonHex(certificate.raw, 'md5')}`,
-    `证书 SHA-256: ${certificate.fingerprint256}`,
+    `证书 MD5: ${fingerprints.md5}`,
+    `证书 SHA-1: ${fingerprints.sha1}`,
+    `证书 SHA-256: ${fingerprints.sha256}`,
     '校验: 通过（keystore 口令 / 别名 / 密钥口令均正确）',
   ].join('\n')
 }
@@ -587,7 +577,7 @@ function renderKeystoreHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', '校验结果（密钥库 / 大小 / 类型 / 别名 / 公钥 / 证书 / 校验结论），每行一条「标签: 值」'],
+          ['stdout', '校验结果（密钥库 / 大小 / 文件摘要 MD5 / SHA-1 / SHA-256 / 类型 / 别名 / 公钥 / 证书及证书 MD5 / SHA-1 / SHA-256 指纹 / 校验结论），每行一条「标签: 值」'],
           ['stderr', '落盘、备份与警告；口令不会输出'],
           ['退出代码', '0 校验通过；1 参数缺失、参数错误、keytool 校验失败或文件读写失败'],
         ],
@@ -595,6 +585,7 @@ function renderKeystoreHelp() {
     ],
     notes: [
       '说明: 校验依赖 JDK 的 keytool；口令会通过 -storepass / -keypass 传给本地 keytool 进程',
+      '说明: MD5 / SHA-1 / SHA-256 覆盖整个密钥库文件（小写十六进制，与 md5sum / sha1sum / sha256sum 一致）；证书指纹是证书 DER 的摘要',
       '说明: 只给 BASE64 时写到临时文件校验，校验完删除；校验通过后才按文件路径落盘',
       '说明: 已存在不同内容的 keystore 会先备份为 <文件>.bak-<时间戳> 再覆盖，权限固定 0600',
       '示例:',
@@ -714,7 +705,7 @@ function renderKeystoreGenHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', '生成后的校验报告（文件 / 类型 / 别名 / 公钥 / 证书 / 校验结论）'],
+          ['stdout', '生成后的校验报告（文件 / 大小 / 文件摘要 MD5 / SHA-1 / SHA-256 / 类型 / 别名 / 公钥 / 证书及证书指纹 / 校验结论）'],
           ['stderr', '生成进度、覆盖前的备份路径与警告；口令不会输出'],
         ],
       },
@@ -734,6 +725,7 @@ function renderKeystoreGenHelp() {
       '',
       '说明: 依赖 JDK 的 keytool；口令会通过 -storepass / -keypass 传给本地 keytool 进程',
       '说明: 生成后会自动用 keytool 校验口令、别名与私钥，并输出校验报告',
+      '说明: 报告里的 MD5 / SHA-1 / SHA-256 覆盖整个密钥库文件（小写十六进制），可用于登记与核对',
       '说明: PKCS12 / JKS 的 keyPassword 均与 storePassword 相同',
       '说明: 目标文件默认 release.p12；后缀不限，类型由 --store-type 决定，不根据后缀推断',
       '说明: 已有文件默认拒绝，--force 会先备份再覆盖',

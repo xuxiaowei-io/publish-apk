@@ -27,6 +27,7 @@ import {
   readEnv,
   stdout,
 } from './cli.js'
+import { DIGEST_HELP_NOTE, digestLines, fileDigests } from './digest.js'
 import { renderHelp } from './help.js'
 import {
   addSignatureCertificates,
@@ -85,7 +86,7 @@ function renderXapkHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', 'XAPK 包信息、拆分 APK 与签名证书，每行一条「标签: 值」；--verbose 时追加外层 ZIP 条目、manifest.json 与明细'],
+          ['stdout', 'XAPK 包信息、文件摘要（MD5 / SHA-1 / SHA-256）、拆分 APK 与签名证书，每行一条「标签: 值」；--verbose 时追加外层 ZIP 条目、manifest.json 与明细'],
           ['stderr', '错误信息'],
         ],
       },
@@ -105,10 +106,11 @@ function renderXapkHelp() {
       `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./app.xapk`,
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
+      DIGEST_HELP_NOTE,
       '说明: XAPK 是第三方渠道的分发格式，外层 ZIP 含 manifest.json、icon.png、base APK 与 config split APK，可能还有 OBB',
       '说明: 包名 / 版本 / SDK / 权限 / 启动 Activity 优先取自 base APK 的 AndroidManifest.xml，manifest.json 用于分发元数据对照',
       '说明: 内层 APK 逐个解析；签名只检测 JAR v1 与 APK Signature Scheme v2 / v3 / v3.1，未执行证书链与摘要验签',
-      '说明: 签名证书默认输出 base APK 的叶子证书 MD5 / SHA-256 指纹；--verbose 输出完整证书链与各 split 明细',
+      '说明: 签名证书默认输出 base APK 的叶子证书 MD5 / SHA-1 / SHA-256 指纹；--verbose 输出完整证书链、SHA-512 指纹与各 split 明细',
       '说明: 不输出证书 PEM 原文；XAPK 里没有私钥',
     ],
   })
@@ -339,6 +341,7 @@ function xapkLines(path, buffer, summary, verbose) {
   const lines = [
     `文件: ${path}`,
     `大小: ${formatBytes(buffer.length)}（${buffer.length} 字节）`,
+    ...digestLines(fileDigests(buffer), verbose),
     `格式: XAPK / ZIP（${entries.length} 个条目）`,
   ]
   const xapkVersion = textOf(metadata?.xapk_version)
@@ -396,7 +399,7 @@ function xapkLines(path, buffer, summary, verbose) {
   if (missing.length > 0) {
     lines.push(`注意: manifest.json 声明的拆分 APK 不在包内: ${missing.join('、')}`)
   }
-  addSignatureCertificates(lines, certificateGroupsOf(base), verbose, { md5: true })
+  addSignatureCertificates(lines, certificateGroupsOf(base), verbose)
   if (!verbose) {
     lines.push(
       '',

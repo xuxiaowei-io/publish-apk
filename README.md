@@ -164,6 +164,12 @@ keystore 文件）时用 `keystore-config`。详见下面的 `keystore` / `keyst
 
 查看 `.p12` 不会输出私钥内容，`profile` 也不会输出证书 PEM 原文，`hap` / `app` / `apk` / `aab` / `xapk` 只读包内信息与签名块头；这些命令只读取本地文件，不会访问应用商店。
 
+以上查看命令默认都会在文件信息之后输出整份文件的 `MD5`、`SHA-1` 与 `SHA-256`（小写十六进制，
+与 `md5sum` / `sha1sum` / `sha256sum` 一致），便于与构建流水线、应用市场或下载页记录的校验值对照；
+展示证书的命令默认同时输出证书的 MD5 / SHA-1 / SHA-256 指纹。`--verbose` 会追加 SHA-512（文件与证书都有），
+默认不输出是为了让常用字段保持紧凑。`keystore` / `keystore-gen` 没有 `--verbose`，因此只有这三种；
+`keystore-env` / `keystore-config` 输出的是机器可读的变量与配置文件，不带摘要。
+
 ### cert（查看证书 / PKCS#12 密钥库信息）
 
 与厂商无关的本地工具：读取 X.509 证书或 PKCS#12 密钥库，把信息**每行一条**写到 `stdout`。
@@ -178,8 +184,9 @@ publish-apk cert --file ./storeFile.p12 --password <密码> --verbose
 CERT_VERBOSE=1 publish-apk cert --file ./a.cer   # 环境变量开启全部字段
 ```
 
-- 证书默认字段：主题、颁发者、生效 / 到期时间、状态（剩余天数）、版本、序列号、签名算法、公钥算法、SHA-256 指纹、是否 CA、是否自签名。
-- `--verbose` / `CERT_VERBOSE=1` 追加：主题与颁发者的每一项、GMT 时间、SHA-1 / SHA-512 指纹、公钥曲线 / 位数 / 指纹，
+- 默认输出整份文件的 `MD5` / `SHA-1` / `SHA-256`（小写十六进制，与 `md5sum` / `sha1sum` / `sha256sum` 一致），`--verbose` 追加 `SHA-512`；PEM 证书、DER 证书与 PKCS#12 都按文件全部字节计算。
+- 证书默认字段：主题、颁发者、生效 / 到期时间、状态（剩余天数）、版本、序列号、签名算法、公钥算法、MD5 / SHA-1 / SHA-256 指纹、是否 CA、是否自签名。
+- `--verbose` / `CERT_VERBOSE=1` 追加：主题与颁发者的每一项、GMT 时间、SHA-512 指纹、公钥曲线 / 位数 / 指纹，
   以及 X.509 扩展（Key Usage、Basic Constraints、SKI / AKI、SAN、EKU、AIA、CRL 分发点、证书策略等）。
 - PEM 文件可以包含多张证书（证书链），按文件里的顺序逐张输出，并以 `证书 #N:` 分隔；DER 文件按一张证书处理。
 - PKCS#12（`.p12` / `.pfx`，Android 的 `storeFile`）输出密钥数量、证书数量、每个别名的密钥算法与证书链；
@@ -203,9 +210,10 @@ PROFILE_FILE=./profile.p7b publish-apk profile     # 环境变量形式
 PROFILE_VERBOSE=1 publish-apk profile --file ./profile.p7b
 ```
 
+- 默认还输出整份文件的 `MD5` / `SHA-1` / `SHA-256`（小写十六进制，与 `md5sum` / `sha1sum` / `sha256sum` 一致；`--verbose` 追加 SHA-512），可用于确认手上的 P7B 与 CI 里的是同一份。
 - 默认输出：类型、版本名称 / 代码、UUID、签发者、Bundle、开发者 ID、App ID、APL、App Feature、
   生效 / 到期时间、状态（剩余天数）、设备数量、权限 / ACL / 应用特权 / 应用服务数量、签名证书数量、
-  开发证书 / 发布证书摘要。
+  开发证书 / 发布证书摘要（含证书 MD5 / SHA-1 / SHA-256 指纹；`--verbose` 追加 SHA-512 与完整证书字段）。
 - `--verbose` / `PROFILE_VERBOSE=1` 追加：P7B 的摘要 / 签名算法与签名者、全部 JSON 字段
   （设备 UDID、权限、ACL、服务能力等逐项一行）、签名证书链与开发 / 发布证书的完整字段。
 - 支持 DER 与 PEM 包裹的 PKCS#7；不输出证书 PEM 原文，P7B 里没有私钥。
@@ -243,8 +251,8 @@ ANDROID_KEYSTORE_BASE64=... ANDROID_KEYSTORE_PASSWORD=... publish-apk keystore
 ```
 
 - `--file` 与 BASE64 同用时是**输出**路径；单独使用时是**输入**路径。
-- stdout 输出：密钥库路径、大小、SHA-256 前 12 位、类型、别名、公钥、证书主题 / 颁发者 / 序列号 /
-  有效期 / MD5、SHA-256 指纹，最后一行是「校验: 通过」。每行一条「标签: 值」。
+- stdout 输出：密钥库路径、大小、文件 MD5 / SHA-1 / SHA-256、类型、别名、公钥、证书主题 / 颁发者 / 序列号 /
+  有效期 / 证书 MD5 / SHA-1 / SHA-256 指纹，最后一行是「校验: 通过」。每行一条「标签: 值」。
 - 落盘时权限固定 `0600`；已存在相同内容则复用，不同内容会先备份为 `<文件>.bak-<时间戳>` 再覆盖。
 - 口令不会打印到 stdout / stderr；但 `keytool` 只接受 `-storepass` / `-keypass` 参数形式，
   校验期间会出现在本地 keytool 进程的 argv 里（与 `huawei signing-config` 的口令自检一致）。
@@ -391,7 +399,7 @@ ANDROID_KEYSTORE_PASSWORD=<口令> publish-apk keystore-gen \
 - 口令至少 6 位；`--store-password` / `ANDROID_KEYSTORE_PASSWORD`，非交互环境没给口令会直接报错，
   交互环境会提示输入两次。PKCS12 / JKS 的 keyPassword 都与 storePassword 相同。
 - 目标文件已存在时默认拒绝；加 `--force` 会先备份为 `<文件>.bak-<时间戳>` 再覆盖。
-- 生成后自动校验，`stdout` 输出与 `keystore` 相同的报告；落盘权限固定 `0600`。
+- 生成后自动校验，`stdout` 输出与 `keystore` 相同的报告（含整份密钥库的 MD5 / SHA-1 / SHA-256 与证书指纹）；落盘权限固定 `0600`。
 - 口令不会打印；但 keytool 只接受 `-storepass` / `-keypass` 参数形式，生成期间会出现在本地
   keytool 进程的 argv 里（与 `keystore` / `huawei signing-config` 一致）。
 - 依赖 JDK 的 `keytool`；可用 `KEYTOOL=/path/to/keytool` 指定。
@@ -412,9 +420,11 @@ HAP_VERBOSE=1 publish-apk hap --file ./app.hap
 ```
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.hap`）；按参数顺序逐个输出，文件之间空一行。
-- 默认输出：文件大小、ZIP 条目数、签名状态、Profile 类型（`release` / `debug`）、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
+- 默认输出：文件大小、整包 MD5 / SHA-1 / SHA-256（`--verbose` 加 SHA-512）、ZIP 条目数、签名状态、Profile 类型（`release` / `debug`）、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
   模块、设备、主 Ability、API 兼容 / 目标版本与原始 API 值（`min` / `target` / `compileSdk`）、安装方式、权限，
-  以及签名证书（HAP 签名方案与 Profile 签名各取叶子证书）。
+  以及签名证书（HAP 签名方案与 Profile 签名各取叶子证书，含 MD5 / SHA-1 / SHA-256 指纹；`--verbose` 加 SHA-512）。
+- MD5 / SHA-1 / SHA-256 是文件整体（含签名块）的摘要（`--verbose` 加 SHA-512），小写十六进制，与 `md5sum` / `sha1sum` / `sha256sum` 一致，
+  可直接与应用市场、分发渠道或下载页给出的校验值核对。
 - `--verbose` / `HAP_VERBOSE=1` 追加：应用标签、厂商、模块包名，
   HAP 签名块版本 / 大小 / 子块类型，全部 ZIP 条目、完整签名证书链，以及完整 `pack.info` / `module.json`。
 - Profile 类型取自 HAP 签名块内嵌 profile JSON 的 `type`（`release` / `debug`）；unsigned 包输出 `未签名`。
@@ -444,9 +454,9 @@ APP_VERBOSE=1 publish-apk app --file ./app.app
 ```
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.app`）；按参数顺序逐个输出，文件之间空一行。
-- 默认输出：文件大小、ZIP 条目数、外层签名状态、Profile 类型（`release` / `debug`）、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
+- 默认输出：文件大小、整包 MD5 / SHA-1 / SHA-256（`--verbose` 加 SHA-512）、ZIP 条目数、外层签名状态、Profile 类型（`release` / `debug`）、包名、版本 / 构建号、构建信息（`debug` / `buildMode` / `bundleType`）、
   模块、设备、主 Ability、API 兼容 / 目标版本与原始 API 值（`min` / `target` / `compileSdk`）、安装方式、权限、
-  内层模块列表，以及外层签名证书（HAP 签名方案与 Profile 签名各取叶子证书）。
+  内层模块列表，以及外层签名证书（HAP 签名方案与 Profile 签名各取叶子证书，含 MD5 / SHA-1 / SHA-256 指纹；`--verbose` 加 SHA-512）。
 - `--verbose` / `APP_VERBOSE=1` 追加：应用标签、厂商、模块包名，
   外层签名块版本 / 大小 / 子块类型，全部 ZIP 条目、完整签名证书链，以及完整 `pack.info` / `pac.json`。
 - Profile 类型取自 APP 外层签名块内嵌 profile JSON 的 `type`（`release` / `debug`）；unsigned 包输出 `未签名`。
@@ -474,9 +484,9 @@ APK_VERBOSE=1 publish-apk apk --file ./app.apk
 ```
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.apk`）；按参数顺序逐个输出，文件之间空一行。
-- 默认输出：文件大小、ZIP 条目数、签名状态与签名方案、包名、版本 / versionCode、
+- 默认输出：文件大小、整包 MD5 / SHA-1 / SHA-256（`--verbose` 加 SHA-512）、ZIP 条目数、签名状态与签名方案、包名、版本 / versionCode、
   Min / Target / 编译 SDK、ABI、DEX 数量、权限、启动 Activity，以及签名证书（叶子证书，
-  含 MD5 / SHA-256 指纹）；末尾会附一行 `（加 --verbose 查看全部字段…）` 提示，`--verbose` 时不再输出。
+  含 MD5 / SHA-1 / SHA-256 指纹，`--verbose` 时补 SHA-512）；末尾会附一行 `（加 --verbose 查看全部字段…）` 提示，`--verbose` 时不再输出。
 - `--verbose` / `APK_VERBOSE=1` 追加：应用标签、允许备份、uses-feature、全部 Activity，
   APK Signing Block 的 pair（v2 / v3 / v3.1 / Source Stamp / Verity Padding）、
   全部 ZIP 条目与完整签名证书链。
@@ -501,9 +511,9 @@ AAB_VERBOSE=1 publish-apk aab --file ./app.aab
 ```
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.aab`）；按参数顺序逐个输出，文件之间空一行。
-- 默认输出：文件大小、ZIP 条目数、JAR v1 签名状态、包名、版本 / versionCode、
+- 默认输出：文件大小、整包 MD5 / SHA-1 / SHA-256（`--verbose` 加 SHA-512）、ZIP 条目数、JAR v1 签名状态、包名、版本 / versionCode、
   Min / Target / 编译 SDK、模块列表、ABI、DEX 数量、权限、启动 Activity，以及签名证书
-  （叶子证书，含 MD5 / SHA-256 指纹）；末尾会附一行 `（加 --verbose 查看全部字段…）` 提示，`--verbose` 时不再输出。
+  （叶子证书，含 MD5 / SHA-1 / SHA-256 指纹，`--verbose` 时补 SHA-512）；末尾会附一行 `（加 --verbose 查看全部字段…）` 提示，`--verbose` 时不再输出。
 - `--verbose` / `AAB_VERBOSE=1` 追加：应用标签、允许备份、uses-feature、全部 Activity、
   `BundleConfig.pb` 大小、全部 ZIP 条目与完整签名证书链。
 - 签名只做检测，**不执行证书链、摘要或签名验签**；输出里会明确写「未验签」。
@@ -528,9 +538,9 @@ XAPK_VERBOSE=1 publish-apk xapk --file ./app.xapk
 ```
 
 - `--file` 支持一次给多个文件，也支持 shell glob（如 `./*.xapk`）；按参数顺序逐个输出，文件之间空一行。
-- 默认输出：文件大小、ZIP 条目数、XAPK 版本、应用名、包名、版本 / versionCode、
+- 默认输出：文件大小、整包 MD5 / SHA-1 / SHA-256（`--verbose` 加 SHA-512）、ZIP 条目数、XAPK 版本、应用名、包名、版本 / versionCode、
   Min / Target SDK、ABI、DEX 数量、权限、启动 Activity、base APK 的签名状态与签名方案、
-  拆分 APK 列表（base + split）与 OBB，以及签名证书（叶子证书，含 MD5 / SHA-256 指纹）；
+  拆分 APK 列表（base + split）与 OBB，以及签名证书（叶子证书，含 MD5 / SHA-1 / SHA-256 指纹；`--verbose` 加 SHA-512）；
   末尾会附一行 `（加 --verbose 查看全部字段…）` 提示，`--verbose` 时不再输出。
 - `--verbose` / `XAPK_VERBOSE=1` 追加：外层 ZIP 条目、`manifest.json` 原文、图标、各 split 的
   包名 / 版本 / SDK / ABI / DEX / 签名 / 条目数、base APK 的签名块 pair、完整证书链，

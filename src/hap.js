@@ -3,6 +3,7 @@
  *
  * 定位：与具体应用市场无关的本地工具——
  *   - HAP 本质是 ZIP，读取 pack.info / module.json 输出包名、版本、模块、设备、API 等；
+ *   - 输出文件整体的 MD5 / SHA-1 / SHA-256 摘要（--verbose 追加 SHA-512），便于与分发平台、下载页给出的校验值核对；
  *   - 检测 HAP 签名块（签名块 / Code Sign Block），区分 signed 与 unsigned；
  *   - --verbose 追加 ZIP 条目、签名子块与完整 pack.info / module.json。
  *
@@ -25,6 +26,7 @@ import {
   stdout,
 } from './cli.js'
 import { certificateDetailLines } from './cert.js'
+import { DIGEST_HELP_NOTE, digestLines, fileDigests } from './digest.js'
 import { renderHelp } from './help.js'
 import { parseP7bDer } from './profile.js'
 
@@ -124,7 +126,7 @@ function renderHapHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', 'HAP 包信息与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与原始 JSON'],
+          ['stdout', 'HAP 包信息、文件摘要（MD5 / SHA-1 / SHA-256）与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与原始 JSON'],
           ['stderr', '错误信息'],
         ],
       },
@@ -144,10 +146,11 @@ function renderHapHelp() {
       `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./app.hap`,
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
+      DIGEST_HELP_NOTE,
       '说明: HAP 是 ZIP，读取 pack.info / module.json；API 原始值取 module.json 的 minAPIVersion / targetAPIVersion / compileSdkVersion',
       '说明: Profile 类型取签名块内嵌 profile JSON 的 type（release / debug）；unsigned 包输出未签名',
       '说明: 签名只检测 HAP 签名块并从内嵌 PKCS#7 提取证书，未执行验签',
-      '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
+      '说明: 默认每组证书只输出叶子证书，并输出证书的 MD5 / SHA-1 / SHA-256 指纹；--verbose 输出完整证书链、SHA-512 指纹与公钥指纹',
       '说明: signed / unsigned 的包内容通常相同，区别在是否带 HAP 签名块',
       '说明: 不输出证书 PEM 原文；HAP 里没有私钥',
     ],
@@ -180,7 +183,7 @@ function renderAppHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', 'APP 包信息、内层模块与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与原始 JSON'],
+          ['stdout', 'APP 包信息、文件摘要（MD5 / SHA-1 / SHA-256）、内层模块与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与原始 JSON'],
           ['stderr', '错误信息'],
         ],
       },
@@ -200,11 +203,12 @@ function renderAppHelp() {
       `  ${ENV_APP_VERBOSE}=1 ${PROGRAM} app --file ./app.app`,
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
+      DIGEST_HELP_NOTE,
       '说明: APP 是 ZIP，含 pac.json、pack.info 与一个或多个内层 .hap / .hsp；本命令读取外层信息',
       '说明: API 原始值取第一个内层 HAP 的 module.json（minAPIVersion / targetAPIVersion / compileSdkVersion）',
       '说明: Profile 类型取外层签名块内嵌 profile JSON 的 type（release / debug）；unsigned 包输出未签名',
       '说明: 签名块在外层，内层 HAP 可能没有单独签名；签名证书从外层 PKCS#7 提取，未执行验签',
-      '说明: 默认每组证书只输出叶子证书；--verbose 输出完整证书链',
+      '说明: 默认每组证书只输出叶子证书，并输出证书的 MD5 / SHA-1 / SHA-256 指纹；--verbose 输出完整证书链、SHA-512 指纹与公钥指纹',
       '说明: 不输出证书 PEM 原文；APP 里没有私钥',
     ],
   })
@@ -559,7 +563,7 @@ function orderCertificateChain(certificates) {
 }
 
 /** 输出签名证书；默认只输出每组的第一张，--verbose 输出完整证书链 */
-export function addSignatureCertificates(lines, groups, verbose, options = {}) {
+export function addSignatureCertificates(lines, groups, verbose) {
   if (groups.length === 0) {
     return
   }
@@ -578,7 +582,7 @@ export function addSignatureCertificates(lines, groups, verbose, options = {}) {
     const selected = verbose ? chain : chain.slice(0, 1)
     selected.forEach((certificate, index) => {
       lines.push(`证书 #${index + 1}:`)
-      for (const detail of certificateDetailLines(certificate, verbose, options)) {
+      for (const detail of certificateDetailLines(certificate, verbose)) {
         lines.push(`  ${detail}`)
       }
     })
@@ -631,6 +635,7 @@ function renderHap(
   const innerModules = options.innerModules ?? []
   const innerApp = options.innerApp ?? null
   const profile = options.profile ?? null
+  const digests = options.digests ?? null
   const summary = pack?.summary ?? {}
   const packApp = summary.app ?? {}
   const packVersion = packApp.version ?? {}
@@ -677,6 +682,7 @@ function renderHap(
   const lines = [
     `文件: ${path}`,
     `大小: ${formatBytes(size)}（${size} 字节）`,
+    ...digestLines(digests, verbose),
     `格式: ${kind} / ZIP（${entries.length} 个条目）`,
     `签名: ${signatureLabel(signature, kind)}`,
   ]
@@ -939,7 +945,7 @@ function runHap(argv, env) {
         parsed.signature,
         certificateGroups,
         verbose,
-        { profile: parsed.profile },
+        { profile: parsed.profile, digests: fileDigests(buffer) },
       ),
     )
     if (index < paths.length - 1) {
@@ -1000,6 +1006,7 @@ function runApp(argv, env) {
           innerModules: parsed.innerModules,
           innerApp: parsed.innerApp,
           profile: parsed.profile,
+          digests: fileDigests(buffer),
         },
       ),
     )

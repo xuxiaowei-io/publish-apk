@@ -24,7 +24,7 @@ import {
   readEnv,
   stdout,
 } from './cli.js'
-import { certificateDetailLines } from './cert.js'
+import { DIGEST_HELP_NOTE, digestLines, fileDigests } from './digest.js'
 import {
   addSignatureCertificates,
   findZipEntry,
@@ -134,7 +134,7 @@ function renderApkHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', 'APK 包信息与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与明细'],
+          ['stdout', 'APK 包信息、文件摘要（MD5 / SHA-1 / SHA-256）与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与明细'],
           ['stderr', '错误信息'],
         ],
       },
@@ -154,9 +154,10 @@ function renderApkHelp() {
       `  ${ENV_VERBOSE}=1 ${PROGRAM} ${COMMAND_NAME} --file ./app.apk`,
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
+      DIGEST_HELP_NOTE,
       '说明: AndroidManifest.xml 是二进制 XML；本命令直接解析，不依赖 aapt / apkanalyzer',
       '说明: 签名只检测 JAR v1 与 APK Signature Scheme v2 / v3 / v3.1，未执行证书链与摘要验签',
-      '说明: 签名证书默认输出叶子证书的 MD5 / SHA-256 指纹；--verbose 输出完整证书链与 SHA-1 / SHA-512 指纹',
+      '说明: 签名证书默认输出叶子证书的 MD5 / SHA-1 / SHA-256 指纹；--verbose 输出完整证书链、SHA-512 指纹与公钥指纹',
       '说明: MD5 指纹是证书 DER 的摘要（XX:XX:… 大写形式），与 keytool、Android Studio 的签名报告一致',
       '说明: 不输出证书 PEM 原文；APK 里没有私钥',
     ],
@@ -189,7 +190,7 @@ function renderAabHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', 'AAB 包信息、模块与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与明细'],
+          ['stdout', 'AAB 包信息、文件摘要（MD5 / SHA-1 / SHA-256）、模块与签名证书，每行一条「标签: 值」；--verbose 时追加 ZIP 条目、完整证书链与明细'],
           ['stderr', '错误信息'],
         ],
       },
@@ -209,9 +210,10 @@ function renderAabHelp() {
       `  ${ENV_AAB_VERBOSE}=1 ${PROGRAM} ${AAB_COMMAND_NAME} --file ./app.aab`,
       '',
       '说明: --file 可以一次给多个文件（shell glob 也可），按顺序输出，文件之间空一行',
+      DIGEST_HELP_NOTE,
       '说明: AAB 是 ZIP，Manifest 在 base/manifest/AndroidManifest.xml；本命令直接解析二进制 XML',
       '说明: AAB 使用 JAR v1 签名（META-INF/*.RSA 等），本命令提取证书但不执行验签',
-      '说明: 签名证书默认输出叶子证书的 MD5 / SHA-256 指纹；--verbose 输出完整证书链与 SHA-1 / SHA-512 指纹',
+      '说明: 签名证书默认输出叶子证书的 MD5 / SHA-1 / SHA-256 指纹；--verbose 输出完整证书链、SHA-512 指纹与公钥指纹',
       '说明: MD5 指纹是证书 DER 的摘要（XX:XX:… 大写形式），与 keytool、Android Studio 的签名报告一致',
       '说明: 不输出证书 PEM 原文；AAB 里没有私钥',
     ],
@@ -721,6 +723,7 @@ function apkLines(buffer, path, entries, manifest, signing, verbose) {
   const lines = [
     `文件: ${path}`,
     `大小: ${formatBytes(buffer.length)}（${buffer.length} 字节）`,
+    ...digestLines(fileDigests(buffer), verbose),
     `格式: APK / ZIP（${entries.length} 个条目）`,
     `签名: ${signatureLabel(v1Groups, signing.schemes)}`,
   ]
@@ -758,7 +761,7 @@ function apkLines(buffer, path, entries, manifest, signing, verbose) {
   if (manifest.debuggable !== undefined) {
     lines.push(`调试: ${manifest.debuggable === true ? '是' : '否'}`)
   }
-  addSignatureCertificates(lines, certificateGroups, verbose, { md5: true })
+  addSignatureCertificates(lines, certificateGroups, verbose)
   if (signing.schemes.length > 0 && certificateGroups.length === 0) {
     lines.push('', '签名证书: 未解析到证书（仅检测到签名块）')
   }
@@ -914,6 +917,7 @@ function aabLines(buffer, path, entries, manifest, v1Groups, verbose) {
   const lines = [
     `文件: ${path}`,
     `大小: ${formatBytes(buffer.length)}（${buffer.length} 字节）`,
+    ...digestLines(fileDigests(buffer), verbose),
     `格式: AAB / ZIP（${entries.length} 个条目）`,
     `签名: ${signatureLabel(v1Groups, [], 'AAB')}`,
   ]
@@ -954,7 +958,7 @@ function aabLines(buffer, path, entries, manifest, v1Groups, verbose) {
   if (manifest.debuggable !== undefined) {
     lines.push(`调试: ${manifest.debuggable === true ? '是' : '否'}`)
   }
-  addSignatureCertificates(lines, v1Groups, verbose, { md5: true })
+  addSignatureCertificates(lines, v1Groups, verbose)
   if (!verbose) {
     lines.push('', '（加 --verbose 查看全部字段：ZIP 条目、BundleConfig.pb、完整证书链与全部 Activity）')
   }

@@ -40,6 +40,7 @@ import {
   readEnv,
   stdout,
 } from './cli.js'
+import { DIGEST_HELP_NOTE, digestLines, fileDigests } from './digest.js'
 import { renderHelp } from './help.js'
 
 /** 命令名（根帮助与示例里使用） */
@@ -137,7 +138,7 @@ function renderCertHelp() {
       {
         title: '输出',
         entries: [
-          ['stdout', '证书或 PKCS#12 密钥库信息，每行一条「标签: 值」；--verbose 时输出全部字段'],
+          ['stdout', '证书或 PKCS#12 密钥库信息、文件摘要（MD5 / SHA-1 / SHA-256），每行一条「标签: 值」；--verbose 时追加 SHA-512 与全部字段'],
           ['stderr', '错误信息'],
         ],
       },
@@ -158,6 +159,8 @@ function renderCertHelp() {
       `  ${PROGRAM} ${COMMAND_NAME} --file ./storeFile.p12 --password <密码> --verbose`,
       '',
       '说明: 必须用 --file 或 CERT_FILE 指定文件，不提供默认文件',
+      DIGEST_HELP_NOTE,
+      '说明: 证书指纹默认输出 MD5 / SHA-1 / SHA-256；--verbose 追加 SHA-512 指纹、公钥指纹与 X.509 扩展',
       `说明: --file 支持 PEM / DER 证书与 PKCS#12 密钥库；PKCS#12 需要系统 openssl 命令（OpenSSL 1.1.1+ / LibreSSL）`,
       '说明: --verbose 是「输出全部字段」，不是运行日志；证书与密钥库信息属于结果，统一写 stdout',
       '说明: 证书原文（PEM/DER）与私钥内容都不输出，需要时直接读取 --file 指向的文件',
@@ -184,6 +187,7 @@ function renderCertHelp() {
 function readInput(path, password, help) {
   const buffer = readCertificateFile(path, help)
   const text = buffer.toString('utf8')
+  const digests = fileDigests(buffer)
 
   // 结构化格式先判定：DER P7B 的 JSON 里可能内嵌 certificate PEM 字符串，
   // 不能先做 PEM 正则扫描，否则会把 P7B 误当成一张 PEM 证书。
@@ -191,6 +195,7 @@ function readInput(path, password, help) {
     return {
       kind: 'pkcs12',
       size: buffer.length,
+      digests,
       ...readPkcs12(path, password, help),
     }
   }
@@ -208,6 +213,7 @@ function readInput(path, password, help) {
       kind: 'certs',
       format: 'PEM',
       size: buffer.length,
+      digests,
       certificates: blocks.map((block, index) => parseCertificate(block, path, index, help)),
     }
   }
@@ -218,6 +224,7 @@ function readInput(path, password, help) {
     kind: 'certs',
     format: 'DER',
     size: buffer.length,
+    digests,
     certificates: [parseCertificate(buffer, path, 0, help)],
   }
 }
@@ -580,6 +587,19 @@ function certificateMd5Fingerprint(certificate) {
   return formatHex(createHash('md5').update(certificate.raw).digest())
 }
 
+/**
+ * 证书指纹：MD5 / SHA-1 / SHA-256 / SHA-512，均为大写、冒号分隔，与 keytool / Android Studio 一致。
+ * 供 cert、profile、keystore 等命令共用，避免各写一套格式。
+ */
+export function certificateFingerprints(certificate) {
+  return {
+    md5: certificateMd5Fingerprint(certificate),
+    sha1: certificate.fingerprint,
+    sha256: certificate.fingerprint256,
+    sha512: certificate.fingerprint512,
+  }
+}
+
 /** 公钥 SPKI 的 SHA-256 指纹（全部字段时输出） */
 function publicKeyFingerprint(key) {
   try {
@@ -605,7 +625,7 @@ function serialDecimal(serialNumber) {
 }
 
 /** 一行的字段集合：同一张证书的默认字段与 --verbose 追加字段都从这里生成 */
-function certificateLines(certificate, verbose, parsed, options = {}) {
+function certificateLines(certificate, verbose, parsed) {
   const lines = []
 
   lines.push(line('主题', oneLineName(certificate.subject)))
@@ -666,15 +686,14 @@ function certificateLines(certificate, verbose, parsed, options = {}) {
     lines.push(line('公钥指纹(SHA-256)', publicKeyFingerprint(certificate.publicKey)))
   }
 
-  if (options.md5 === true) {
-    lines.push(line('MD5 指纹', certificateMd5Fingerprint(certificate)))
-  }
+  // 证书指纹：MD5 / SHA-1 / SHA-256 分别被不同平台用于签名登记（微信、Google、华为等），默认输出；
+  // SHA-512 行较长、用得少，与公钥指纹、X.509 扩展一起放在 --verbose。
+  const fingerprints = certificateFingerprints(certificate)
+  lines.push(line('MD5 指纹', fingerprints.md5))
+  lines.push(line('SHA-1 指纹', fingerprints.sha1))
+  lines.push(line('SHA-256 指纹', fingerprints.sha256))
   if (verbose) {
-    lines.push(line('SHA-1 指纹', certificate.fingerprint))
-  }
-  lines.push(line('SHA-256 指纹', certificate.fingerprint256))
-  if (verbose) {
-    lines.push(line('SHA-512 指纹', certificate.fingerprint512))
+    lines.push(line('SHA-512 指纹', fingerprints.sha512))
   }
 
   lines.push(line('是否 CA', certificate.ca ? '是' : '否'))
@@ -696,19 +715,19 @@ function certificateLines(certificate, verbose, parsed, options = {}) {
  * cert 命令内部已经在用 certificateLines；这里只包一层 DER 解析，避免其它模块
  * 重复实现「证书 → 可读字段」的逻辑。
  *
- * options.md5 为 true 时追加 MD5 指纹（Android 市场 / 微信等平台注册签名要用），
- * 默认关闭，避免 cert / hap 等命令的输出字段发生变化。
+ * 默认输出 MD5 / SHA-1 / SHA-256 指纹；--verbose 追加 SHA-512 指纹、公钥指纹与 X.509 扩展。
  */
-export function certificateDetailLines(certificate, verbose = false, options = {}) {
-  return certificateLines(certificate, verbose, parseCertificateDerSafe(certificate.raw), options)
+export function certificateDetailLines(certificate, verbose = false) {
+  return certificateLines(certificate, verbose, parseCertificateDerSafe(certificate.raw))
 }
 
 /** 一张证书的全部输出行；多张证书时用 `#N` 标题分隔 */
-function renderCertificates(path, { format, size, certificates }, verbose) {
+function renderCertificates(path, { format, size, digests, certificates }, verbose) {
   const lines = [
     line('文件', path),
     line('格式', format),
     ...(verbose ? [line('文件大小', `${size} 字节`)] : []),
+    ...digestLines(digests, verbose),
     line('证书数量', certificates.length),
   ]
 
@@ -729,11 +748,12 @@ function renderCertificates(path, { format, size, certificates }, verbose) {
  * 私钥只以算法形式出现（RSA / EC / Ed25519 等），不输出任何密钥材料；
  * 证书与密钥的对应关系优先按 localKeyID，缺失时退回 friendlyName（别名）。
  */
-export function renderPkcs12(path, { size, keys, certs, meta }, verbose) {
+export function renderPkcs12(path, { size, digests, keys, certs, meta }, verbose) {
   const lines = [
     line('文件', path),
     line('格式', 'PKCS#12'),
     ...(verbose ? [line('文件大小', `${size} 字节`)] : []),
+    ...digestLines(digests, verbose),
     line('密钥数量', keys.length),
     line('证书数量', certs.length),
   ]
